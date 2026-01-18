@@ -1,7 +1,7 @@
 {
   "name": "sports-platform-backend-nestjs",
   "version": "1.0.0",
-  "description": "Enterprise-grade NestJS backend for Sports Platform",
+  "description": "Enterprise-grade NestJS backend for ScoreNews",
   "author": "Pixel Forge Web Development Agency",
   "private": true,
   "license": "UNLICENSED",

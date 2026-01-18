@@ -1,6 +1,6 @@
-# Sports Platform Backend - NestJS
+# ScoreNews Backend - NestJS
 
-Enterprise-grade NestJS backend for Sports Platform with MongoDB, Redis, Elasticsearch, and WebSocket support.
+Enterprise-grade NestJS backend for ScoreNews with MongoDB, Redis, Elasticsearch, and WebSocket support.
 
 ## 🚀 Quick Start
 
