@@ -10,6 +10,9 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - 'nest-cli.json'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.dockerignore'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:  # Allow manual trigger
 
@@ -43,18 +46,18 @@ jobs:
           npm run build
           echo "✅ Build successful"
 
-      - name: Deploy to DigitalOcean
+      - name: Deploy to DigitalOcean with Docker
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: 22
-          timeout: 300s
+          timeout: 600s
           script: |
             set -e
             
-            echo "🚀 Starting deployment to DigitalOcean..."
+            echo "🐳 Starting Docker deployment to DigitalOcean..."
             echo "📅 Deployment time: $(date)"
             echo "🔄 Branch: main"
             echo "📍 Server: $(hostname)"
@@ -68,6 +71,15 @@ jobs:
               exit 1
             fi
             
+            # Check Docker
+            echo "🐳 Checking Docker..."
+            if ! command -v docker &> /dev/null; then
+              echo "❌ Docker is not installed!"
+              exit 1
+            fi
+            docker --version
+            docker-compose --version
+            
             # Pull latest changes
             echo "📥 Pulling latest changes from GitHub..."
             git fetch origin main
@@ -78,49 +90,60 @@ jobs:
             echo "📝 Latest commit:"
             git log -1 --oneline
             
-            # Install all dependencies (including dev for build)
-            echo "📦 Installing dependencies..."
-            npm ci
+            # Stop existing container if running
+            echo "🛑 Stopping existing container..."
+            docker-compose down || true
             
-            # Build application
-            echo "🔨 Building application..."
-            npm run build
+            # Build and start new container
+            echo "🔨 Building Docker image..."
+            docker-compose build --no-cache
             
-            # Verify build
-            if [ ! -f "dist/main.js" ]; then
-              echo "❌ Error: Build failed - dist/main.js not found!"
-              exit 1
-            fi
+            echo "🚀 Starting container..."
+            docker-compose up -d
             
-            echo "✅ Build successful"
+            # Wait for container to start
+            echo "⏳ Waiting for container to be ready..."
+            sleep 10
             
-            # Restart PM2
-            echo "🔄 Restarting application with PM2..."
-            pm2 restart sports-platform-api --update-env
+            # Check container status
+            echo "📊 Container Status:"
+            docker-compose ps
             
-            # Wait for app to start
-            sleep 3
+            # Wait for health check
+            echo "🏥 Waiting for health check..."
+            MAX_ATTEMPTS=30
+            ATTEMPT=0
+            HEALTHY=false
             
-            # Check PM2 status
-            echo "📊 PM2 Status:"
-            pm2 status
+            while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+              HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/api/v1/health || echo "000")
+              if [ "$HEALTH_CHECK" = "200" ]; then
+                HEALTHY=true
+                break
+              fi
+              ATTEMPT=$((ATTEMPT + 1))
+              echo "  Attempt $ATTEMPT/$MAX_ATTEMPTS: HTTP $HEALTH_CHECK (waiting...)"
+              sleep 2
+            done
             
-            # Health check
-            echo "🏥 Running health check..."
-            HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/api/v1/health || echo "000")
-            
-            if [ "$HEALTH_CHECK" = "200" ]; then
-              echo "✅ Health check passed (HTTP $HEALTH_CHECK)"
+            if [ "$HEALTHY" = true ]; then
+              echo "✅ Health check passed (HTTP 200)"
               echo "✅ Deployment successful!"
+              
+              # Show container logs
+              echo "📋 Container logs (last 20 lines):"
+              docker-compose logs --tail=20
             else
-              echo "⚠️  Health check returned HTTP $HEALTH_CHECK"
-              echo "📋 Recent PM2 logs:"
-              pm2 logs sports-platform-api --lines 20 --nostream || true
+              echo "❌ Health check failed after $MAX_ATTEMPTS attempts"
+              echo "📋 Container logs:"
+              docker-compose logs --tail=50
+              echo "📋 Container status:"
+              docker-compose ps
               exit 1
             fi
             
             echo ""
-            echo "🎉 Deployment completed successfully!"
+            echo "🎉 Docker deployment completed successfully!"
             echo "🌐 API: https://api.scorenews.net/api/v1"
             echo "📊 Health: https://api.scorenews.net/api/v1/health"
 

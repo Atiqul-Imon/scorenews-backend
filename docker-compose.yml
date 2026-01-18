@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: sports-platform-api:latest
+    container_name: sports-platform-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    networks:
+      - sports-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/v1/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis (if using local Redis instead of managed service)
+  # Uncomment if you want to run Redis in Docker
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: sports-platform-redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   networks:
+  #     - sports-network
+
+networks:
+  sports-network:
+    driver: bridge
+
+# volumes:
+#   redis_data:
+#     driver: local
+
