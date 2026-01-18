@@ -21,7 +21,7 @@ DOMAIN="${2:-}"
 EMAIL="${3:-}"
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Enterprise Deployment - Sports Platform API${NC}"
+echo -e "${BLUE}  Enterprise Deployment - ScoreNews API${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
