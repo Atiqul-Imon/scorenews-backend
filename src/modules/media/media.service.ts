@@ -1,14 +1,16 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WinstonLoggerService } from '../../common/logger/winston-logger.service';
-import ImageKit from 'imagekit';
 import { v2 as cloudinary } from 'cloudinary';
 import * as sharp from 'sharp';
 import { randomUUID } from 'crypto';
 
+// ImageKit uses CommonJS, need to import this way
+const ImageKit = require('imagekit');
+
 @Injectable()
 export class MediaService {
-  private imagekit: ImageKit | null = null;
+  private imagekit: typeof ImageKit | null = null;
   private useCloudinary: boolean = false;
 
   constructor(

@@ -62,7 +62,7 @@ export class FootballMatch {
   @Prop({ required: true, index: true })
   startTime: Date;
 
-  @Prop()
+  @Prop({ type: Date })
   endTime?: Date;
 
   @Prop({
