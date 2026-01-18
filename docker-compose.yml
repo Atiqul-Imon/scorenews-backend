@@ -10,8 +10,9 @@ services:
     image: sports-platform-api:latest
     container_name: sports-platform-api
     restart: unless-stopped
-    ports:
-      - "5000:5000"
+    # Note: When using network_mode: host, ports mapping is ignored
+    # Use host network mode to access host Redis directly via localhost
+    network_mode: host
     environment:
       - NODE_ENV=production
     env_file:
@@ -19,8 +20,6 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./uploads:/app/uploads
-    networks:
-      - sports-network
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/v1/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
       interval: 30s
