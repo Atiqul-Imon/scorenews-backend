@@ -1,0 +1,140 @@
+name: Deploy Backend to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'nest-cli.json'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies (for validation)
+        run: |
+          npm ci
+          echo "✅ Dependencies installed successfully"
+
+      - name: Build application (validation)
+        run: |
+          npm run build
+          echo "✅ Build successful"
+
+      - name: Deploy to DigitalOcean
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          timeout: 300s
+          script: |
+            set -e
+            
+            echo "🚀 Starting deployment to DigitalOcean..."
+            echo "📅 Deployment time: $(date)"
+            echo "🔄 Branch: main"
+            echo "📍 Server: $(hostname)"
+            
+            APP_DIR="/var/www/sports-platform-api"
+            cd $APP_DIR
+            
+            # Check if directory exists
+            if [ ! -d "$APP_DIR" ]; then
+              echo "❌ Error: Application directory not found!"
+              exit 1
+            fi
+            
+            # Pull latest changes
+            echo "📥 Pulling latest changes from GitHub..."
+            git fetch origin main
+            git checkout main
+            git pull origin main
+            
+            # Show commit info
+            echo "📝 Latest commit:"
+            git log -1 --oneline
+            
+            # Install dependencies
+            echo "📦 Installing dependencies..."
+            npm ci --production
+            
+            # Build application
+            echo "🔨 Building application..."
+            npm run build
+            
+            # Verify build
+            if [ ! -f "dist/main.js" ]; then
+              echo "❌ Error: Build failed - dist/main.js not found!"
+              exit 1
+            fi
+            
+            echo "✅ Build successful"
+            
+            # Restart PM2
+            echo "🔄 Restarting application with PM2..."
+            pm2 restart sports-platform-api --update-env
+            
+            # Wait for app to start
+            sleep 3
+            
+            # Check PM2 status
+            echo "📊 PM2 Status:"
+            pm2 status
+            
+            # Health check
+            echo "🏥 Running health check..."
+            HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/api/v1/health || echo "000")
+            
+            if [ "$HEALTH_CHECK" = "200" ]; then
+              echo "✅ Health check passed (HTTP $HEALTH_CHECK)"
+              echo "✅ Deployment successful!"
+            else
+              echo "⚠️  Health check returned HTTP $HEALTH_CHECK"
+              echo "📋 Recent PM2 logs:"
+              pm2 logs sports-platform-api --lines 20 --nostream || true
+              exit 1
+            fi
+            
+            echo ""
+            echo "🎉 Deployment completed successfully!"
+            echo "🌐 API: https://api.scorenews.net/api/v1"
+            echo "📊 Health: https://api.scorenews.net/api/v1/health"
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "✅ Deployment completed successfully!"
+          echo "🌐 Production URL: https://api.scorenews.net/api/v1"
+          echo "📊 Health Check: https://api.scorenews.net/api/v1/health"
+
+      - name: Deployment Failed
+        if: failure()
+        run: |
+          echo "❌ Deployment failed!"
+          echo "Please check the logs above for details."
+
