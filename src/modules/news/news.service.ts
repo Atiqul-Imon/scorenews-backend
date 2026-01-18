@@ -123,6 +123,30 @@ export class NewsService {
     };
   }
 
+  async getArticleBySlug(slug: string) {
+    const article = await this.newsArticleModel
+      .findOne({ slug, isDeleted: false })
+      .populate('author', 'name email avatar')
+      .lean();
+
+    if (!article) {
+      throw new NotFoundException('Article not found');
+    }
+
+    // Only return published articles (unless accessing through admin)
+    if (article.state !== 'published') {
+      throw new NotFoundException('Article not found');
+    }
+
+    // Increment views
+    await this.newsArticleModel.updateOne({ slug }, { $inc: { viewCount: 1 } });
+
+    return {
+      success: true,
+      data: article,
+    };
+  }
+
   async getArticleById(id: string) {
     const article = await this.newsArticleModel
       .findById(id)
