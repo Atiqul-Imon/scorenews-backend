@@ -83,8 +83,15 @@ jobs:
             # Pull latest changes
             echo "📥 Pulling latest changes from GitHub..."
             git fetch origin main
+            
+            # Handle any local changes (stash or discard)
+            if ! git diff-index --quiet HEAD --; then
+              echo "⚠️  Local changes detected, stashing them..."
+              git stash save "CI/CD: Stashing local changes before deployment $(date +%Y%m%d-%H%M%S)" || true
+            fi
+            
             git checkout main
-            git pull origin main
+            git reset --hard origin/main
             
             # Show commit info
             echo "📝 Latest commit:"
