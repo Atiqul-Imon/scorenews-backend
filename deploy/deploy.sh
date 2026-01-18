@@ -35,9 +35,9 @@ git pull origin $BRANCH
 echo "📝 Latest commit:"
 git log -1 --oneline
 
-# Install dependencies
+# Install all dependencies (including dev for build)
 echo "📦 Installing dependencies..."
-npm ci --production
+npm ci
 
 # Build application
 echo "🔨 Building application..."
