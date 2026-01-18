@@ -82,10 +82,10 @@ export class NewsArticle {
   })
   state: string;
 
-  @Prop({ index: true, default: null })
+  @Prop({ type: Date, index: true, default: null })
   scheduledAt?: Date | null;
 
-  @Prop({ index: true })
+  @Prop({ type: Date, index: true })
   publishedAt?: Date | null;
 
   @Prop({ trim: true })

@@ -30,7 +30,7 @@ export class User {
   @Prop()
   resetPasswordToken?: string;
 
-  @Prop()
+  @Prop({ type: Date })
   resetPasswordExpires?: Date;
 
   @Prop({
@@ -73,7 +73,7 @@ export class User {
     totalLikes: number;
   };
 
-  @Prop()
+  @Prop({ type: Date })
   lastLogin?: Date;
 
   // Virtuals
