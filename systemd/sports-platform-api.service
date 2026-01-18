@@ -1,5 +1,5 @@
 [Unit]
-Description=Sports Platform API - NestJS Backend
+Description=ScoreNews API - NestJS Backend
 After=network.target mongodb.service redis.service
 
 [Service]

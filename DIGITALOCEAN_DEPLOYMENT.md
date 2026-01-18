@@ -1,6 +1,6 @@
 # DigitalOcean Deployment Guide
 
-Complete guide for deploying the Sports Platform NestJS backend to a DigitalOcean droplet.
+Complete guide for deploying the ScoreNews NestJS backend to a DigitalOcean droplet.
 
 ## 📋 Prerequisites
 

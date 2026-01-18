@@ -48,9 +48,9 @@ export class EmailService {
       await this.transporter.sendMail({
         from: smtpUser,
         to: email,
-        subject: 'Verify Your Email - Sports Platform',
+        subject: 'Verify Your Email - ScoreNews',
         html: `
-          <h2>Welcome to Sports Platform!</h2>
+          <h2>Welcome to ScoreNews!</h2>
           <p>Please click the link below to verify your email address:</p>
           <a href="${verificationUrl}">Verify Email</a>
           <p>If you didn't create an account, please ignore this email.</p>
@@ -77,7 +77,7 @@ export class EmailService {
       await this.transporter.sendMail({
         from: smtpUser,
         to: email,
-        subject: 'Reset Your Password - Sports Platform',
+        subject: 'Reset Your Password - ScoreNews',
         html: `
           <h2>Password Reset Request</h2>
           <p>Please click the link below to reset your password:</p>

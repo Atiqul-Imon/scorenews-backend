@@ -101,8 +101,8 @@ async function bootstrap() {
   // Swagger API Documentation
   if (nodeEnv !== 'production') {
     const config = new DocumentBuilder()
-      .setTitle('Sports Platform API')
-      .setDescription('Enterprise-grade API for Sports Platform - Live Cricket & Football Scores')
+      .setTitle('ScoreNews API')
+      .setDescription('Enterprise-grade API for ScoreNews - Live Cricket & Football Scores')
       .setVersion('1.0')
       .addBearerAuth(
         {

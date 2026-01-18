@@ -5,7 +5,7 @@
 
 set -e
 
-echo "🚀 Starting server setup for Sports Platform Backend..."
+echo "🚀 Starting server setup for ScoreNews Backend..."
 
 # Update system
 echo "📦 Updating system packages..."
