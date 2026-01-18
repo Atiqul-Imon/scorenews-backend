@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { HttpModule } from '@nestjs/axios';
 import { FootballController } from './football.controller';
 import { FootballService } from './football.service';
 import { FootballMatch, FootballMatchSchema } from './schemas/football-match.schema';
@@ -10,6 +11,7 @@ import { LoggerModule } from '../../common/logger/logger.module';
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: FootballMatch.name, schema: FootballMatchSchema }]),
+    HttpModule,
     RedisModule,
     LoggerModule,
   ],

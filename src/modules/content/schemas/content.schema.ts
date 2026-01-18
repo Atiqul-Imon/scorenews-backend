@@ -76,7 +76,7 @@ export class Content {
     likes: number;
   }>;
 
-  @Prop({ index: true })
+  @Prop({ type: Date, index: true })
   publishedAt?: Date;
 }
 
