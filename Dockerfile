@@ -61,3 +61,4 @@ ENTRYPOINT ["dumb-init", "--"]
 # Start the application
 CMD ["node", "dist/main.js"]
 
+

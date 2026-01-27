@@ -39,6 +39,9 @@ export const configValidationSchema = Joi.object({
 
   // API Keys
   CRICKET_API_KEY: Joi.string().optional(),
+  CRICKET_API_BASE_URL: Joi.string().optional(),
+  CRICKETDATA_API_KEY: Joi.string().optional(),
+  CRICKETDATA_BASE_URL: Joi.string().optional(),
   FOOTBALL_API_KEY: Joi.string().optional(),
   ESPN_API_KEY: Joi.string().optional(),
   SPORTMONKS_BASE_URL: Joi.string().optional(),

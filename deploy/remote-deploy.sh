@@ -59,3 +59,4 @@ echo "   1. Configure .env file with your production values"
 echo "   2. Restart the application: pm2 restart sports-platform-api"
 echo "   3. Verify deployment: curl http://localhost:5000/api/health"
 
+
