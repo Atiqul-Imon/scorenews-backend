@@ -22,8 +22,10 @@ export class CricketController {
   @Get('matches/live')
   @ApiOperation({ summary: 'Get live cricket matches' })
   @ApiResponse({ status: 200, description: 'Live matches retrieved successfully' })
-  async getLiveMatches() {
-    return this.cricketService.getLiveMatches();
+  async getLiveMatches(@Query('t') timestamp?: string) {
+    // If timestamp query param is present, bypass cache for real-time updates
+    const bypassCache = !!timestamp;
+    return this.cricketService.getLiveMatches(bypassCache);
   }
 
   @Public()

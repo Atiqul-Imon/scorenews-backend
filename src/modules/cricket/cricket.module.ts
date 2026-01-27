@@ -7,6 +7,7 @@ import { CricketMatch, CricketMatchSchema } from './schemas/cricket-match.schema
 import { CricketTeam, CricketTeamSchema } from './schemas/cricket-team.schema';
 import { CricketApiService } from './services/cricket-api.service';
 import { SportsMonksService } from './services/sportsmonks.service';
+import { CricketDataService } from './services/cricketdata.service';
 import { RedisModule } from '../../redis/redis.module';
 import { LoggerModule } from '../../common/logger/logger.module';
 
@@ -21,7 +22,7 @@ import { LoggerModule } from '../../common/logger/logger.module';
     LoggerModule,
   ],
   controllers: [CricketController],
-  providers: [CricketService, CricketApiService, SportsMonksService],
+  providers: [CricketService, CricketApiService, SportsMonksService, CricketDataService],
   exports: [CricketService],
 })
 export class CricketModule {}

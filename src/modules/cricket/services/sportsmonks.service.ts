@@ -21,6 +21,10 @@ export class SportsMonksService {
   }
 
   private getBaseUrl(sport: Sport): string {
+    // Use v2.0 API for cricket (v3 requires different subscription)
+    if (sport === 'cricket') {
+      return 'https://cricket.sportmonks.com/api/v2.0';
+    }
     return `https://api.sportmonks.com/v3/${sport}`;
   }
 
@@ -34,11 +38,13 @@ export class SportsMonksService {
       }
 
       const baseUrl = this.getBaseUrl(sport);
+      // Use v2.0 endpoint for cricket
+      const endpoint = sport === 'cricket' ? `${baseUrl}/livescores` : `${baseUrl}/livescores/inplay`;
       const response = await firstValueFrom(
-        this.httpService.get(`${baseUrl}/livescores/inplay`, {
+        this.httpService.get(endpoint, {
           params: {
             api_token: this.apiToken,
-            include: 'scores,participants',
+            include: sport === 'cricket' ? 'scoreboards,localteam,visitorteam' : 'scores,participants',
           },
         }),
       );
@@ -53,11 +59,13 @@ export class SportsMonksService {
         // Try fixtures endpoint as fallback
         try {
           const baseUrl = this.getBaseUrl(sport);
+          const endpoint = sport === 'cricket' ? `${baseUrl}/fixtures` : `${baseUrl}/fixtures`;
+          const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam' : 'scores,participants';
           const response = await firstValueFrom(
-            this.httpService.get(`${baseUrl}/fixtures`, {
+            this.httpService.get(endpoint, {
               params: {
                 api_token: this.apiToken,
-                include: 'scores,participants',
+                include: includeParam,
                 per_page: 50,
               },
             }),
@@ -98,11 +106,12 @@ export class SportsMonksService {
       }
 
       const baseUrl = this.getBaseUrl(sport);
+      const includeParam = sport === 'cricket' ? 'localteam,visitorteam' : 'participants';
       const response = await firstValueFrom(
         this.httpService.get(`${baseUrl}/fixtures`, {
           params: {
             api_token: this.apiToken,
-            include: 'participants',
+            include: includeParam,
             per_page: 100,
           },
         }),
@@ -136,11 +145,12 @@ export class SportsMonksService {
       }
 
       const baseUrl = this.getBaseUrl(sport);
+      const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam' : 'scores,participants';
       const response = await firstValueFrom(
         this.httpService.get(`${baseUrl}/fixtures`, {
           params: {
             api_token: this.apiToken,
-            include: 'scores,participants',
+            include: includeParam,
             per_page: 100,
           },
         }),
@@ -182,11 +192,15 @@ export class SportsMonksService {
       }
 
       const baseUrl = this.getBaseUrl(sport);
+      // v2.0 uses different includes than v3
+      const includeParam = sport === 'cricket' 
+        ? 'localteam,visitorteam,scoreboards,venue,league,season' 
+        : 'scores,participants,lineups,events';
       const response = await firstValueFrom(
         this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
           params: {
             api_token: this.apiToken,
-            include: 'scores,participants,lineups,events',
+            include: includeParam,
           },
         }),
       );
