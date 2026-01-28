@@ -325,9 +325,11 @@ export class SportsMonksService {
       const baseUrl = this.getBaseUrl(sport);
       // v2.0 uses different includes than v3
       // Include batting and bowling for detailed match statistics
-      // Note: player data might not always be included, so we'll handle it gracefully
+      // For SportMonks v2.0 cricket API, use simpler include format
+      // v2.0 supports: scoreboards (which includes batting/bowling), batting, bowling separately
+      // Player data is included automatically when requesting batting/bowling
       const includeParam = sport === 'cricket' 
-        ? 'localteam,visitorteam,scoreboards,venue,league,season,batting.player,bowling.player' 
+        ? 'localteam,visitorteam,scoreboards,batting,bowling,venue,league,season' 
         : 'scores,participants,lineups,events';
       const response = await firstValueFrom(
         this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
@@ -344,6 +346,38 @@ export class SportsMonksService {
       if (!match) {
         this.logger.warn(`No match data returned from SportMonks API for ${matchId}`, 'SportsMonksService');
         throw new Error(`Match ${matchId} not found in SportMonks API`);
+      }
+      
+      // Log the structure to debug batting/bowling data
+      if (sport === 'cricket') {
+        this.logger.log(`[Match ${matchId}] Raw API response keys: ${Object.keys(match).join(', ')}`, 'SportsMonksService');
+        this.logger.log(`[Match ${matchId}] Has batting: ${!!match.batting}, Type: ${Array.isArray(match.batting) ? 'array' : typeof match.batting}, Length: ${Array.isArray(match.batting) ? match.batting.length : 'N/A'}`, 'SportsMonksService');
+        this.logger.log(`[Match ${matchId}] Has bowling: ${!!match.bowling}, Type: ${Array.isArray(match.bowling) ? 'array' : typeof match.bowling}, Length: ${Array.isArray(match.bowling) ? match.bowling.length : 'N/A'}`, 'SportsMonksService');
+        this.logger.log(`[Match ${matchId}] Has scoreboards: ${!!match.scoreboards}, Count: ${match.scoreboards?.length || 0}`, 'SportsMonksService');
+        if (match.scoreboards && match.scoreboards.length > 0) {
+          match.scoreboards.forEach((sb: any, idx: number) => {
+            this.logger.log(`[Match ${matchId}] Scoreboard ${idx} keys: ${Object.keys(sb || {}).join(', ')}`, 'SportsMonksService');
+            if (sb.batting) {
+              this.logger.log(`[Match ${matchId}] Scoreboard ${idx} has batting: ${Array.isArray(sb.batting) ? sb.batting.length : 'not array'} records`, 'SportsMonksService');
+              if (Array.isArray(sb.batting) && sb.batting.length > 0) {
+                this.logger.log(`[Match ${matchId}] Sample batting record keys: ${Object.keys(sb.batting[0] || {}).join(', ')}`, 'SportsMonksService');
+              }
+            }
+            if (sb.bowling) {
+              this.logger.log(`[Match ${matchId}] Scoreboard ${idx} has bowling: ${Array.isArray(sb.bowling) ? sb.bowling.length : 'not array'} records`, 'SportsMonksService');
+              if (Array.isArray(sb.bowling) && sb.bowling.length > 0) {
+                this.logger.log(`[Match ${matchId}] Sample bowling record keys: ${Object.keys(sb.bowling[0] || {}).join(', ')}`, 'SportsMonksService');
+              }
+            }
+          });
+        }
+        // Log sample batting/bowling data if available at root
+        if (Array.isArray(match.batting) && match.batting.length > 0) {
+          this.logger.log(`[Match ${matchId}] Root batting sample: ${JSON.stringify(match.batting[0])}`, 'SportsMonksService');
+        }
+        if (Array.isArray(match.bowling) && match.bowling.length > 0) {
+          this.logger.log(`[Match ${matchId}] Root bowling sample: ${JSON.stringify(match.bowling[0])}`, 'SportsMonksService');
+        }
       }
       
       // No caching - return fresh data

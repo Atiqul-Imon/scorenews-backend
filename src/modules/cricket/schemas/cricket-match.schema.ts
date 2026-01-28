@@ -344,9 +344,10 @@ export class CricketMatch {
 
   @Prop({
     type: {
-      home: { type: Number },
-      away: { type: Number },
+      home: { type: Number, default: 0 },
+      away: { type: Number, default: 0 },
     },
+    required: false,
   })
   score?: {
     home: number;
