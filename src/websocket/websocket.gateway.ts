@@ -15,8 +15,13 @@ import { FootballService } from '../modules/football/football.service';
 @WebSocketGateway({
   cors: {
     origin: '*',
+    credentials: true,
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   },
   namespace: '/live',
+  transports: ['websocket', 'polling'], // Explicitly allow both transports
+  allowEIO3: true, // Allow Engine.IO v3 clients
 })
 export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
