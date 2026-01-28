@@ -22,13 +22,7 @@ export class CricketApiService {
 
   async getLiveMatches(): Promise<any[]> {
     try {
-      const cacheKey = 'cricket_api:live_matches';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       const response = await firstValueFrom(
         this.httpService.get(`${this.baseUrl}/matches`, {
           params: { apikey: this.apiKey, status: 'live' },
@@ -40,9 +34,7 @@ export class CricketApiService {
       }
 
       const matches = response.data.data || [];
-      const cacheDuration = this.configService.get<string>('NODE_ENV') === 'production' ? 900 : 30;
-      await this.redisService.set(cacheKey, JSON.stringify(matches), cacheDuration);
-
+      // No caching - return fresh data
       return matches;
     } catch (error: any) {
       this.logger.error('Error fetching live cricket matches', error.stack, 'CricketApiService');
@@ -52,13 +44,7 @@ export class CricketApiService {
 
   async getUpcomingMatches(): Promise<any[]> {
     try {
-      const cacheKey = 'cricket_api:upcoming_matches';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       const response = await firstValueFrom(
         this.httpService.get(`${this.baseUrl}/matches`, {
           params: { apikey: this.apiKey, status: 'upcoming' },
@@ -70,9 +56,7 @@ export class CricketApiService {
       }
 
       const matches = response.data.data || [];
-      const cacheDuration = this.configService.get<string>('NODE_ENV') === 'production' ? 900 : 300;
-      await this.redisService.set(cacheKey, JSON.stringify(matches), cacheDuration);
-
+      // No caching - return fresh data
       return matches;
     } catch (error: any) {
       this.logger.error('Error fetching upcoming cricket matches', error.stack, 'CricketApiService');
@@ -82,13 +66,7 @@ export class CricketApiService {
 
   async getCompletedMatches(): Promise<any[]> {
     try {
-      const cacheKey = 'cricket_api:completed_matches';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       const response = await firstValueFrom(
         this.httpService.get(`${this.baseUrl}/matches`, {
           params: { apikey: this.apiKey, status: 'completed' },
@@ -100,8 +78,7 @@ export class CricketApiService {
       }
 
       const matches = response.data.data || [];
-      await this.redisService.set(cacheKey, JSON.stringify(matches), 3600);
-
+      // No caching - return fresh data
       return matches;
     } catch (error: any) {
       this.logger.error('Error fetching completed cricket matches', error.stack, 'CricketApiService');
@@ -111,13 +88,7 @@ export class CricketApiService {
 
   async getMatchDetails(matchId: string): Promise<any> {
     try {
-      const cacheKey = `cricket_api:match:${matchId}`;
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       const response = await firstValueFrom(
         this.httpService.get(`${this.baseUrl}/matches/${matchId}`, {
           params: { apikey: this.apiKey },
@@ -129,8 +100,7 @@ export class CricketApiService {
       }
 
       const match = response.data.data;
-      await this.redisService.set(cacheKey, JSON.stringify(match), 60);
-
+      // No caching - return fresh data
       return match;
     } catch (error: any) {
       this.logger.error(`Error fetching match details for ${matchId}`, error.stack, 'CricketApiService');

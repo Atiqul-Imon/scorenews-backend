@@ -41,13 +41,7 @@ export class CricketDataService {
    */
   async getLiveMatches(): Promise<any[]> {
     try {
-      const cacheKey = 'cricketdata:live_matches';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       if (!this.apiKey) {
         throw new Error('CRICKETDATA_API_KEY is not configured');
       }
@@ -63,10 +57,7 @@ export class CricketDataService {
 
       const matches = response.data?.data || response.data || [];
       
-      // Cache for 30 seconds (live data updates frequently)
-      const cacheDuration = this.configService.get<string>('NODE_ENV') === 'production' ? 30 : 15;
-      await this.redisService.set(cacheKey, JSON.stringify(matches), cacheDuration);
-
+      // No caching - return fresh data
       return matches;
     } catch (error: any) {
       this.logger.error(
@@ -83,13 +74,7 @@ export class CricketDataService {
    */
   async getUpcomingMatches(): Promise<any[]> {
     try {
-      const cacheKey = 'cricketdata:upcoming_matches';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       if (!this.apiKey) {
         throw new Error('CRICKETDATA_API_KEY is not configured');
       }
@@ -105,10 +90,7 @@ export class CricketDataService {
 
       const matches = response.data?.data || response.data || [];
       
-      // Cache for 5 minutes (upcoming matches don't change as frequently)
-      const cacheDuration = this.configService.get<string>('NODE_ENV') === 'production' ? 300 : 60;
-      await this.redisService.set(cacheKey, JSON.stringify(matches), cacheDuration);
-
+      // No caching - return fresh data
       return matches;
     } catch (error: any) {
       this.logger.error(
@@ -125,13 +107,7 @@ export class CricketDataService {
    */
   async getCompletedMatches(): Promise<any[]> {
     try {
-      const cacheKey = 'cricketdata:completed_matches';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       if (!this.apiKey) {
         throw new Error('CRICKETDATA_API_KEY is not configured');
       }
@@ -147,9 +123,7 @@ export class CricketDataService {
 
       const matches = response.data?.data || response.data || [];
       
-      // Cache for 1 hour (completed matches don't change)
-      await this.redisService.set(cacheKey, JSON.stringify(matches), 3600);
-
+      // No caching - return fresh data
       return matches;
     } catch (error: any) {
       this.logger.error(
@@ -166,13 +140,7 @@ export class CricketDataService {
    */
   async getMatchDetails(matchId: string): Promise<any> {
     try {
-      const cacheKey = `cricketdata:match:${matchId}`;
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       if (!this.apiKey) {
         throw new Error('CRICKETDATA_API_KEY is not configured');
       }
@@ -188,10 +156,7 @@ export class CricketDataService {
 
       const match = response.data?.data || response.data;
       
-      // Cache for 30 seconds (live match details update frequently)
-      const cacheDuration = this.configService.get<string>('NODE_ENV') === 'production' ? 30 : 15;
-      await this.redisService.set(cacheKey, JSON.stringify(match), cacheDuration);
-
+      // No caching - return fresh data
       return match;
     } catch (error: any) {
       this.logger.error(
@@ -208,15 +173,7 @@ export class CricketDataService {
    */
   async getPlayerStats(playerId?: string): Promise<any> {
     try {
-      const cacheKey = playerId 
-        ? `cricketdata:player:${playerId}`
-        : 'cricketdata:players';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       if (!this.apiKey) {
         throw new Error('CRICKETDATA_API_KEY is not configured');
       }
@@ -235,9 +192,7 @@ export class CricketDataService {
 
       const data = response.data?.data || response.data;
       
-      // Cache for 1 hour (player stats don't change frequently)
-      await this.redisService.set(cacheKey, JSON.stringify(data), 3600);
-
+      // No caching - return fresh data
       return data;
     } catch (error: any) {
       this.logger.error(
@@ -254,13 +209,7 @@ export class CricketDataService {
    */
   async getSeries(): Promise<any[]> {
     try {
-      const cacheKey = 'cricketdata:series';
-      const cachedData = await this.redisService.get(cacheKey);
-
-      if (cachedData) {
-        return JSON.parse(cachedData);
-      }
-
+      // No caching - always fetch fresh data
       if (!this.apiKey) {
         throw new Error('CRICKETDATA_API_KEY is not configured');
       }
@@ -275,9 +224,7 @@ export class CricketDataService {
 
       const series = response.data?.data || response.data || [];
       
-      // Cache for 1 hour (series info doesn't change frequently)
-      await this.redisService.set(cacheKey, JSON.stringify(series), 3600);
-
+      // No caching - return fresh data
       return series;
     } catch (error: any) {
       this.logger.error(

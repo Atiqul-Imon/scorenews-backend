@@ -22,10 +22,11 @@ export class CricketController {
   @Get('matches/live')
   @ApiOperation({ summary: 'Get live cricket matches' })
   @ApiResponse({ status: 200, description: 'Live matches retrieved successfully' })
-  async getLiveMatches(@Query('t') timestamp?: string) {
-    // If timestamp query param is present, bypass cache for real-time updates
-    const bypassCache = !!timestamp;
-    return this.cricketService.getLiveMatches(bypassCache);
+  async getLiveMatches() {
+    // Always fetch fresh data - no caching
+    const matches = await this.cricketService.getLiveMatches();
+    // Return as array for frontend compatibility
+    return Array.isArray(matches) ? matches : [];
   }
 
   @Public()
@@ -89,5 +90,14 @@ export class CricketController {
   @ApiResponse({ status: 200, description: 'Statistics retrieved successfully' })
   async getStats() {
     return this.cricketService.getStats();
+  }
+
+  @Public()
+  @Get('teams/:teamName/matches')
+  @ApiOperation({ summary: 'Get team match statistics' })
+  @ApiParam({ name: 'teamName', description: 'Team name' })
+  @ApiResponse({ status: 200, description: 'Team match statistics retrieved successfully' })
+  async getTeamMatches(@Param('teamName') teamName: string) {
+    return this.cricketService.getTeamMatches(teamName);
   }
 }
