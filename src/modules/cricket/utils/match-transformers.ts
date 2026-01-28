@@ -131,11 +131,21 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
 
   let status: 'live' | 'completed' | 'upcoming' | 'cancelled' = 'upcoming';
   
-  if (isV2Format) {
-    // v2.0 format: use live field and status
+  // Check state_id first (available in both v2.0 and v3)
+  const stateId = apiMatch.state_id;
+  if (stateId !== undefined) {
+    if (stateId === 5 || stateId === 6) {
+      status = 'completed';
+    } else if (stateId === 3 || stateId === 4) {
+      status = 'live';
+    } else if (stateId === 1 || stateId === 2) {
+      status = 'upcoming';
+    }
+  } else if (isV2Format) {
+    // v2.0 format: use live field and status as fallback
     if (apiMatch.live === true) {
       status = 'live';
-    } else if (apiMatch.status && (apiMatch.status.includes('Finished') || apiMatch.status.includes('Completed'))) {
+    } else if (apiMatch.status && (apiMatch.status.includes('Finished') || apiMatch.status.includes('Completed') || apiMatch.status.includes('Result'))) {
       status = 'completed';
     } else if (apiMatch.status && apiMatch.status.includes('Innings')) {
       status = 'live';
@@ -143,8 +153,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       status = 'upcoming';
     }
   } else {
-    // v3 format: use state_id
-    const stateId = apiMatch.state_id;
+    // v3 format fallback (shouldn't reach here if state_id exists)
     if (stateId === 5 || stateId === 6) {
       status = 'completed';
     } else if (stateId === 3 || stateId === 4) {
@@ -304,10 +313,11 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     // Add innings data for scorecard if available (v2.0 format)
     innings: isV2Format && scores.length > 0
       ? scores
-          .filter((s: any) => s.total !== undefined && s.overs !== undefined)
+          .filter((s: any) => s.total !== undefined && s.overs !== undefined && s.total > 0)
           .map((s: any, index: number) => ({
             number: index + 1,
             team: s.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+            teamId: s.team_id?.toString(),
             runs: s.total || 0,
             wickets: s.wickets || 0,
             overs: parseFloat(s.overs?.toString() || '0') || 0,
@@ -316,6 +326,177 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
               ? ((s.total || 0) / parseFloat(s.overs?.toString() || '1')) 
               : 0,
           }))
+      : undefined,
+    // Additional match information
+    matchNote: apiMatch.note || undefined,
+    round: apiMatch.round || undefined,
+    tossWon: apiMatch.toss_won_team_id 
+      ? (apiMatch.toss_won_team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name)
+      : undefined,
+    elected: apiMatch.elected || undefined,
+    target: apiMatch.note?.includes('Target') 
+      ? parseInt(apiMatch.note.match(/Target (\d+)/)?.[1] || '0')
+      : undefined,
+    endingAt: apiMatch.ending_at ? new Date(apiMatch.ending_at) : undefined,
+    // Current batters and bowlers for live view
+    currentBatters: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting)
+      ? apiMatch.batting
+          .filter((b: any) => b.active === true || (!b.batsmanout_id && (b.score > 0 || b.ball > 0)))
+          .slice(0, 2) // Get top 2 current batters
+          .map((b: any) => {
+            let playerName = `Player ${b.player_id || 'Unknown'}`;
+            if (b.player) {
+              if (typeof b.player === 'object') {
+                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+              } else if (typeof b.player === 'string') {
+                playerName = b.player;
+              }
+            }
+            return {
+              playerId: b.player_id?.toString(),
+              playerName,
+              runs: b.score || 0,
+              balls: b.ball || 0,
+              fours: b.four_x || 0,
+              sixes: b.six_x || 0,
+              strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
+              teamId: b.team_id?.toString(),
+              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+            };
+          })
+      : undefined,
+    currentBowlers: isV2Format && apiMatch.bowling && Array.isArray(apiMatch.bowling)
+      ? apiMatch.bowling
+          .filter((b: any) => b.overs > 0 && b.wickets >= 0)
+          .sort((a: any, b: any) => {
+            // Sort by most recent (highest overs or most recent activity)
+            return (b.overs || 0) - (a.overs || 0);
+          })
+          .slice(0, 2) // Get top 2 current bowlers
+          .map((b: any) => {
+            let playerName = `Player ${b.player_id || 'Unknown'}`;
+            if (b.player) {
+              if (typeof b.player === 'object') {
+                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+              } else if (typeof b.player === 'string') {
+                playerName = b.player;
+              }
+            }
+            return {
+              playerId: b.player_id?.toString(),
+              playerName,
+              overs: parseFloat(b.overs?.toString() || '0') || 0,
+              maidens: b.maidens || 0,
+              runs: b.runs || 0,
+              wickets: b.wickets || 0,
+              economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
+              teamId: b.team_id?.toString(),
+              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+            };
+          })
+      : undefined,
+    partnership: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting)
+      ? (() => {
+          const currentBatsmen = apiMatch.batting.filter((b: any) => b.active === true || (!b.batsmanout_id && (b.score > 0 || b.ball > 0)));
+          if (currentBatsmen.length >= 2) {
+            const totalRuns = currentBatsmen.reduce((sum: number, b: any) => sum + (b.score || 0), 0);
+            const totalBalls = currentBatsmen.reduce((sum: number, b: any) => sum + (b.ball || 0), 0);
+            const partnershipRR = totalBalls > 0 ? ((totalRuns / totalBalls) * 6).toFixed(2) : '0.00';
+            return {
+              runs: totalRuns,
+              balls: totalBalls,
+              runRate: partnershipRR,
+            };
+          }
+          return undefined;
+        })()
+      : undefined,
+    lastWicket: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting)
+      ? (() => {
+          const lastOut = apiMatch.batting
+            .filter((b: any) => b.batsmanout_id && b.fow_score !== undefined)
+            .sort((a: any, b: any) => (b.fow_score || 0) - (a.fow_score || 0))[0];
+          if (lastOut) {
+            let playerName = `Player ${lastOut.player_id || 'Unknown'}`;
+            if (lastOut.player) {
+              if (typeof lastOut.player === 'object') {
+                playerName = lastOut.player.fullname || lastOut.player.name || lastOut.player.firstname || playerName;
+              } else if (typeof lastOut.player === 'string') {
+                playerName = lastOut.player;
+              }
+            }
+            return {
+              playerId: lastOut.player_id?.toString(),
+              playerName,
+              runs: lastOut.score || 0,
+              balls: lastOut.ball || 0,
+              fowScore: lastOut.fow_score,
+              fowBalls: lastOut.fow_balls,
+            };
+          }
+          return undefined;
+        })()
+      : undefined,
+    // Add batting and bowling statistics
+    batting: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting) && apiMatch.batting.length > 0
+      ? apiMatch.batting
+          .filter((b: any) => b.score !== undefined && b.score !== null && (b.score > 0 || b.ball > 0))
+          .map((b: any) => {
+            // Player name - try to get from included player data, otherwise use player_id
+            let playerName = `Player ${b.player_id || 'Unknown'}`;
+            if (b.player) {
+              if (typeof b.player === 'object') {
+                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+              } else if (typeof b.player === 'string') {
+                playerName = b.player;
+              }
+            }
+            
+            return {
+              playerId: b.player_id?.toString(),
+              playerName,
+              runs: b.score || 0,
+              balls: b.ball || 0,
+              fours: b.four_x || 0,
+              sixes: b.six_x || 0,
+              strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
+              isOut: !!b.batsmanout_id,
+              dismissedBy: b.bowling_player_id?.toString(),
+              teamId: b.team_id?.toString(),
+              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+              fowScore: b.fow_score || undefined,
+              fowBalls: b.fow_balls || undefined,
+            };
+          })
+          .sort((a: any, b: any) => b.runs - a.runs) // Sort by runs descending
+      : undefined,
+    bowling: isV2Format && apiMatch.bowling && Array.isArray(apiMatch.bowling) && apiMatch.bowling.length > 0
+      ? apiMatch.bowling
+          .filter((b: any) => (b.overs || b.wickets) && (b.overs > 0 || b.wickets > 0))
+          .map((b: any) => {
+            // Player name - try to get from included player data, otherwise use player_id
+            let playerName = `Player ${b.player_id || 'Unknown'}`;
+            if (b.player) {
+              if (typeof b.player === 'object') {
+                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+              } else if (typeof b.player === 'string') {
+                playerName = b.player;
+              }
+            }
+            
+            return {
+              playerId: b.player_id?.toString(),
+              playerName,
+              overs: parseFloat(b.overs?.toString() || '0') || 0,
+              maidens: b.maidens || 0,
+              runs: b.runs || 0,
+              wickets: b.wickets || 0,
+              economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
+              teamId: b.team_id?.toString(),
+              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+            };
+          })
+          .sort((a: any, b: any) => b.wickets - a.wickets || a.economy - b.economy) // Sort by wickets, then economy
       : undefined,
   };
 }

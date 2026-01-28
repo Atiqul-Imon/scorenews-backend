@@ -162,6 +162,196 @@ export class CricketMatch {
     overs?: number;
     economy?: number;
   }>;
+
+  // Additional match details
+  @Prop()
+  name?: string;
+
+  @Prop()
+  matchNote?: string;
+
+  @Prop()
+  round?: string;
+
+  @Prop()
+  tossWon?: string;
+
+  @Prop()
+  elected?: string;
+
+  @Prop()
+  target?: number;
+
+  @Prop()
+  endingAt?: Date;
+
+  // Current batters and bowlers for live matches
+  @Prop({
+    type: [
+      {
+        playerId: { type: String },
+        playerName: { type: String, required: true },
+        runs: { type: Number, default: 0 },
+        balls: { type: Number, default: 0 },
+        fours: { type: Number, default: 0 },
+        sixes: { type: Number, default: 0 },
+        strikeRate: { type: Number, default: 0 },
+        teamId: { type: String },
+        teamName: { type: String, required: true },
+      },
+    ],
+  })
+  currentBatters?: Array<{
+    playerId?: string;
+    playerName: string;
+    runs: number;
+    balls: number;
+    fours: number;
+    sixes: number;
+    strikeRate: number;
+    teamId?: string;
+    teamName: string;
+  }>;
+
+  @Prop({
+    type: [
+      {
+        playerId: { type: String },
+        playerName: { type: String, required: true },
+        overs: { type: Number, default: 0 },
+        maidens: { type: Number, default: 0 },
+        runs: { type: Number, default: 0 },
+        wickets: { type: Number, default: 0 },
+        economy: { type: Number, default: 0 },
+        teamId: { type: String },
+        teamName: { type: String, required: true },
+      },
+    ],
+  })
+  currentBowlers?: Array<{
+    playerId?: string;
+    playerName: string;
+    overs: number;
+    maidens: number;
+    runs: number;
+    wickets: number;
+    economy: number;
+    teamId?: string;
+    teamName: string;
+  }>;
+
+  @Prop({
+    type: {
+      runs: { type: Number, default: 0 },
+      balls: { type: Number, default: 0 },
+      runRate: { type: String },
+    },
+  })
+  partnership?: {
+    runs: number;
+    balls: number;
+    runRate: string;
+  };
+
+  @Prop({
+    type: {
+      playerId: { type: String },
+      playerName: { type: String, required: true },
+      runs: { type: Number, default: 0 },
+      balls: { type: Number, default: 0 },
+      fowScore: { type: Number },
+      fowBalls: { type: Number },
+    },
+  })
+  lastWicket?: {
+    playerId?: string;
+    playerName: string;
+    runs: number;
+    balls: number;
+    fowScore?: number;
+    fowBalls?: number;
+  };
+
+  // Full batting and bowling statistics
+  @Prop({
+    type: [
+      {
+        playerId: { type: String },
+        playerName: { type: String, required: true },
+        runs: { type: Number, default: 0 },
+        balls: { type: Number, default: 0 },
+        fours: { type: Number, default: 0 },
+        sixes: { type: Number, default: 0 },
+        strikeRate: { type: Number, default: 0 },
+        isOut: { type: Boolean, default: false },
+        dismissedBy: { type: String },
+        teamId: { type: String },
+        teamName: { type: String, required: true },
+        fowScore: { type: Number },
+        fowBalls: { type: Number },
+      },
+    ],
+  })
+  batting?: Array<{
+    playerId?: string;
+    playerName: string;
+    runs: number;
+    balls: number;
+    fours: number;
+    sixes: number;
+    strikeRate: number;
+    isOut: boolean;
+    dismissedBy?: string;
+    teamId?: string;
+    teamName: string;
+    fowScore?: number;
+    fowBalls?: number;
+  }>;
+
+  @Prop({
+    type: [
+      {
+        playerId: { type: String },
+        playerName: { type: String, required: true },
+        overs: { type: Number, default: 0 },
+        maidens: { type: Number, default: 0 },
+        runs: { type: Number, default: 0 },
+        wickets: { type: Number, default: 0 },
+        economy: { type: Number, default: 0 },
+        teamId: { type: String },
+        teamName: { type: String, required: true },
+      },
+    ],
+  })
+  bowling?: Array<{
+    playerId?: string;
+    playerName: string;
+    overs: number;
+    maidens: number;
+    runs: number;
+    wickets: number;
+    economy: number;
+    teamId?: string;
+    teamName: string;
+  }>;
+
+  // Match metadata
+  @Prop({ default: false })
+  matchStarted?: boolean;
+
+  @Prop({ default: false })
+  matchEnded?: boolean;
+
+  @Prop({
+    type: {
+      home: { type: Number },
+      away: { type: Number },
+    },
+  })
+  score?: {
+    home: number;
+    away: number;
+  };
 }
 
 export const CricketMatchSchema = SchemaFactory.createForClass(CricketMatch);
