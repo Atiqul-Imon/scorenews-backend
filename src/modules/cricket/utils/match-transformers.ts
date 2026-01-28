@@ -339,62 +339,179 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       : undefined,
     endingAt: apiMatch.ending_at ? new Date(apiMatch.ending_at) : undefined,
     // Current batters and bowlers for live view
-    currentBatters: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting)
-      ? apiMatch.batting
-          .filter((b: any) => b.active === true || (!b.batsmanout_id && (b.score > 0 || b.ball > 0)))
-          .slice(0, 2) // Get top 2 current batters
-          .map((b: any) => {
-            let playerName = `Player ${b.player_id || 'Unknown'}`;
-            if (b.player) {
-              if (typeof b.player === 'object') {
-                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-              } else if (typeof b.player === 'string') {
-                playerName = b.player;
-              }
-            }
-            return {
-              playerId: b.player_id?.toString(),
-              playerName,
-              runs: b.score || 0,
-              balls: b.ball || 0,
-              fours: b.four_x || 0,
-              sixes: b.six_x || 0,
-              strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
-              teamId: b.team_id?.toString(),
-              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
-            };
-          })
-      : undefined,
-    currentBowlers: isV2Format && apiMatch.bowling && Array.isArray(apiMatch.bowling)
-      ? apiMatch.bowling
-          .filter((b: any) => b.overs > 0 && b.wickets >= 0)
-          .sort((a: any, b: any) => {
-            // Sort by most recent (highest overs or most recent activity)
-            return (b.overs || 0) - (a.overs || 0);
-          })
-          .slice(0, 2) // Get top 2 current bowlers
-          .map((b: any) => {
-            let playerName = `Player ${b.player_id || 'Unknown'}`;
-            if (b.player) {
-              if (typeof b.player === 'object') {
-                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-              } else if (typeof b.player === 'string') {
-                playerName = b.player;
-              }
-            }
-            return {
-              playerId: b.player_id?.toString(),
-              playerName,
-              overs: parseFloat(b.overs?.toString() || '0') || 0,
-              maidens: b.maidens || 0,
-              runs: b.runs || 0,
-              wickets: b.wickets || 0,
-              economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
-              teamId: b.team_id?.toString(),
-              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
-            };
-          })
-      : undefined,
+    currentBatters: (() => {
+      if (!isV2Format) {
+        console.log('[Transformer] Not v2 format, skipping currentBatters');
+        return undefined;
+      }
+      
+      console.log('[Transformer] Extracting currentBatters...');
+      console.log('[Transformer] apiMatch.batting:', apiMatch.batting ? `${Array.isArray(apiMatch.batting) ? apiMatch.batting.length : 'not array'} items` : 'not present');
+      console.log('[Transformer] apiMatch.scoreboards:', apiMatch.scoreboards ? `${Array.isArray(apiMatch.scoreboards) ? apiMatch.scoreboards.length : 'not array'} items` : 'not present');
+      
+      // Try root level first
+      let battingData = apiMatch.batting;
+      
+      // If not at root, try extracting from scoreboards (get the latest/current scoreboard)
+      if ((!battingData || !Array.isArray(battingData) || battingData.length === 0) && apiMatch.scoreboards) {
+        console.log('[Transformer] Checking scoreboards for batting data...');
+        // Get the most recent scoreboard (usually the one being batted on)
+        const scoreboardsWithBatting = apiMatch.scoreboards.filter((sb: any) => sb.batting && Array.isArray(sb.batting) && sb.batting.length > 0);
+        console.log('[Transformer] Scoreboards with batting:', scoreboardsWithBatting.length);
+        
+        if (scoreboardsWithBatting.length > 0) {
+          const latestScoreboard = scoreboardsWithBatting
+            .sort((a: any, b: any) => (b.overs || 0) - (a.overs || 0))[0];
+          if (latestScoreboard && latestScoreboard.batting) {
+            battingData = latestScoreboard.batting;
+            console.log('[Transformer] Found batting data in scoreboard:', latestScoreboard.batting.length, 'items');
+          }
+        }
+      }
+      
+      if (!battingData || !Array.isArray(battingData) || battingData.length === 0) {
+        console.log('[Transformer] No batting data found');
+        return undefined;
+      }
+      
+      console.log('[Transformer] Processing', battingData.length, 'batting records');
+      
+      // Filter for current batters (not out, and have some activity)
+      // Relaxed filter: include any batter that's not out, even if they haven't scored yet
+      const currentBatsmen = battingData
+        .filter((b: any) => {
+          const isNotOut = !b.batsmanout_id;
+          const hasActivity = b.active === true || b.score > 0 || b.ball > 0;
+          const result = isNotOut && (hasActivity || b.active === true);
+          if (result) {
+            console.log('[Transformer] Found current batter:', b.player_id, 'active:', b.active, 'score:', b.score, 'ball:', b.ball);
+          }
+          return result;
+        })
+        .sort((a: any, b: any) => {
+          // Sort by active first, then by runs
+          if (a.active && !b.active) return -1;
+          if (!a.active && b.active) return 1;
+          return (b.score || 0) - (a.score || 0);
+        })
+        .slice(0, 2); // Get top 2 current batters
+      
+      console.log('[Transformer] Filtered to', currentBatsmen.length, 'current batters');
+      
+      if (currentBatsmen.length === 0) {
+        console.log('[Transformer] No current batters after filtering');
+        return undefined;
+      }
+      
+      return currentBatsmen.map((b: any) => {
+        let playerName = `Player ${b.player_id || 'Unknown'}`;
+        if (b.player) {
+          if (typeof b.player === 'object') {
+            playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+          } else if (typeof b.player === 'string') {
+            playerName = b.player;
+          }
+        }
+        return {
+          playerId: b.player_id?.toString(),
+          playerName,
+          runs: b.score || 0,
+          balls: b.ball || 0,
+          fours: b.four_x || 0,
+          sixes: b.six_x || 0,
+          strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
+          teamId: b.team_id?.toString(),
+          teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+        };
+      });
+    })(),
+    currentBowlers: (() => {
+      if (!isV2Format) {
+        console.log('[Transformer] Not v2 format, skipping currentBowlers');
+        return undefined;
+      }
+      
+      console.log('[Transformer] Extracting currentBowlers...');
+      console.log('[Transformer] apiMatch.bowling:', apiMatch.bowling ? `${Array.isArray(apiMatch.bowling) ? apiMatch.bowling.length : 'not array'} items` : 'not present');
+      console.log('[Transformer] apiMatch.scoreboards:', apiMatch.scoreboards ? `${Array.isArray(apiMatch.scoreboards) ? apiMatch.scoreboards.length : 'not array'} items` : 'not present');
+      
+      // Try root level first
+      let bowlingData = apiMatch.bowling;
+      
+      // If not at root, try extracting from scoreboards (get the latest/current scoreboard)
+      if ((!bowlingData || !Array.isArray(bowlingData) || bowlingData.length === 0) && apiMatch.scoreboards) {
+        console.log('[Transformer] Checking scoreboards for bowling data...');
+        // Get the most recent scoreboard (usually the one being bowled on)
+        const scoreboardsWithBowling = apiMatch.scoreboards.filter((sb: any) => sb.bowling && Array.isArray(sb.bowling) && sb.bowling.length > 0);
+        console.log('[Transformer] Scoreboards with bowling:', scoreboardsWithBowling.length);
+        
+        if (scoreboardsWithBowling.length > 0) {
+          const latestScoreboard = scoreboardsWithBowling
+            .sort((a: any, b: any) => (b.overs || 0) - (a.overs || 0))[0];
+          if (latestScoreboard && latestScoreboard.bowling) {
+            bowlingData = latestScoreboard.bowling;
+            console.log('[Transformer] Found bowling data in scoreboard:', latestScoreboard.bowling.length, 'items');
+          }
+        }
+      }
+      
+      if (!bowlingData || !Array.isArray(bowlingData) || bowlingData.length === 0) {
+        console.log('[Transformer] No bowling data found');
+        return undefined;
+      }
+      
+      console.log('[Transformer] Processing', bowlingData.length, 'bowling records');
+      
+      // Filter for current bowlers (have bowled at least some overs or are active)
+      // Relaxed filter: include any bowler that's active or has bowled
+      const currentBowlers = bowlingData
+        .filter((b: any) => {
+          const hasOvers = b.overs > 0;
+          const isActive = b.active === true;
+          const hasWickets = b.wickets >= 0;
+          const result = (hasOvers || isActive) && hasWickets;
+          if (result) {
+            console.log('[Transformer] Found current bowler:', b.player_id, 'active:', b.active, 'overs:', b.overs, 'wickets:', b.wickets);
+          }
+          return result;
+        })
+        .sort((a: any, b: any) => {
+          // Sort by active first, then by most recent (highest overs)
+          if (a.active && !b.active) return -1;
+          if (!a.active && b.active) return 1;
+          return (b.overs || 0) - (a.overs || 0);
+        })
+        .slice(0, 2); // Get top 2 current bowlers
+      
+      console.log('[Transformer] Filtered to', currentBowlers.length, 'current bowlers');
+      
+      if (currentBowlers.length === 0) {
+        console.log('[Transformer] No current bowlers after filtering');
+        return undefined;
+      }
+      
+      return currentBowlers.map((b: any) => {
+        let playerName = `Player ${b.player_id || 'Unknown'}`;
+        if (b.player) {
+          if (typeof b.player === 'object') {
+            playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+          } else if (typeof b.player === 'string') {
+            playerName = b.player;
+          }
+        }
+        return {
+          playerId: b.player_id?.toString(),
+          playerName,
+          overs: parseFloat(b.overs?.toString() || '0') || 0,
+          maidens: b.maidens || 0,
+          runs: b.runs || 0,
+          wickets: b.wickets || 0,
+          economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
+          teamId: b.team_id?.toString(),
+          teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+        };
+      });
+    })(),
     partnership: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting)
       ? (() => {
           const currentBatsmen = apiMatch.batting.filter((b: any) => b.active === true || (!b.batsmanout_id && (b.score > 0 || b.ball > 0)));
@@ -438,66 +555,140 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         })()
       : undefined,
     // Add batting and bowling statistics
-    batting: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting) && apiMatch.batting.length > 0
-      ? apiMatch.batting
-          .filter((b: any) => b.score !== undefined && b.score !== null && (b.score > 0 || b.ball > 0))
-          .map((b: any) => {
-            // Player name - try to get from included player data, otherwise use player_id
-            let playerName = `Player ${b.player_id || 'Unknown'}`;
-            if (b.player) {
-              if (typeof b.player === 'object') {
-                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-              } else if (typeof b.player === 'string') {
-                playerName = b.player;
-              }
+    // Check both root level and nested in scoreboards
+    batting: (() => {
+      if (!isV2Format) return undefined;
+      
+      // Try root level first
+      let battingData = apiMatch.batting;
+      
+      // Debug logging
+      console.log('[Transformer] Checking batting data:', {
+        hasRootBatting: !!apiMatch.batting,
+        rootBattingType: Array.isArray(apiMatch.batting) ? 'array' : typeof apiMatch.batting,
+        rootBattingLength: Array.isArray(apiMatch.batting) ? apiMatch.batting.length : 'N/A',
+        hasScoreboards: !!apiMatch.scoreboards,
+        scoreboardsLength: apiMatch.scoreboards?.length || 0,
+      });
+      
+      // If not at root, try extracting from scoreboards
+      if ((!battingData || !Array.isArray(battingData) || battingData.length === 0) && apiMatch.scoreboards) {
+        const allBatting: any[] = [];
+        apiMatch.scoreboards.forEach((scoreboard: any, index: number) => {
+          console.log(`[Transformer] Scoreboard ${index} keys:`, Object.keys(scoreboard || {}));
+          if (scoreboard.batting && Array.isArray(scoreboard.batting)) {
+            console.log(`[Transformer] Found ${scoreboard.batting.length} batting records in scoreboard ${index}`);
+            allBatting.push(...scoreboard.batting);
+          }
+        });
+        if (allBatting.length > 0) {
+          battingData = allBatting;
+          console.log(`[Transformer] Extracted ${allBatting.length} batting records from scoreboards`);
+        }
+      }
+      
+      if (!battingData || !Array.isArray(battingData) || battingData.length === 0) {
+        console.log('[Transformer] No batting data found');
+        return undefined;
+      }
+      
+      console.log(`[Transformer] Processing ${battingData.length} batting records`);
+      
+      return battingData
+        .filter((b: any) => b.score !== undefined && b.score !== null && (b.score > 0 || b.ball > 0))
+        .map((b: any) => {
+          // Player name - try to get from included player data, otherwise use player_id
+          let playerName = `Player ${b.player_id || 'Unknown'}`;
+          if (b.player) {
+            if (typeof b.player === 'object') {
+              playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+            } else if (typeof b.player === 'string') {
+              playerName = b.player;
             }
-            
-            return {
-              playerId: b.player_id?.toString(),
-              playerName,
-              runs: b.score || 0,
-              balls: b.ball || 0,
-              fours: b.four_x || 0,
-              sixes: b.six_x || 0,
-              strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
-              isOut: !!b.batsmanout_id,
-              dismissedBy: b.bowling_player_id?.toString(),
-              teamId: b.team_id?.toString(),
-              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
-              fowScore: b.fow_score || undefined,
-              fowBalls: b.fow_balls || undefined,
-            };
-          })
-          .sort((a: any, b: any) => b.runs - a.runs) // Sort by runs descending
-      : undefined,
-    bowling: isV2Format && apiMatch.bowling && Array.isArray(apiMatch.bowling) && apiMatch.bowling.length > 0
-      ? apiMatch.bowling
-          .filter((b: any) => (b.overs || b.wickets) && (b.overs > 0 || b.wickets > 0))
-          .map((b: any) => {
-            // Player name - try to get from included player data, otherwise use player_id
-            let playerName = `Player ${b.player_id || 'Unknown'}`;
-            if (b.player) {
-              if (typeof b.player === 'object') {
-                playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-              } else if (typeof b.player === 'string') {
-                playerName = b.player;
-              }
+          }
+          
+          return {
+            playerId: b.player_id?.toString(),
+            playerName,
+            runs: b.score || 0,
+            balls: b.ball || 0,
+            fours: b.four_x || 0,
+            sixes: b.six_x || 0,
+            strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
+            isOut: !!b.batsmanout_id,
+            dismissedBy: b.bowling_player_id?.toString(),
+            teamId: b.team_id?.toString(),
+            teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+            fowScore: b.fow_score || undefined,
+            fowBalls: b.fow_balls || undefined,
+          };
+        })
+        .sort((a: any, b: any) => b.runs - a.runs); // Sort by runs descending
+    })(),
+    bowling: (() => {
+      if (!isV2Format) return undefined;
+      
+      // Try root level first
+      let bowlingData = apiMatch.bowling;
+      
+      // Debug logging
+      console.log('[Transformer] Checking bowling data:', {
+        hasRootBowling: !!apiMatch.bowling,
+        rootBowlingType: Array.isArray(apiMatch.bowling) ? 'array' : typeof apiMatch.bowling,
+        rootBowlingLength: Array.isArray(apiMatch.bowling) ? apiMatch.bowling.length : 'N/A',
+        hasScoreboards: !!apiMatch.scoreboards,
+        scoreboardsLength: apiMatch.scoreboards?.length || 0,
+      });
+      
+      // If not at root, try extracting from scoreboards
+      if ((!bowlingData || !Array.isArray(bowlingData) || bowlingData.length === 0) && apiMatch.scoreboards) {
+        const allBowling: any[] = [];
+        apiMatch.scoreboards.forEach((scoreboard: any, index: number) => {
+          if (scoreboard.bowling && Array.isArray(scoreboard.bowling)) {
+            console.log(`[Transformer] Found ${scoreboard.bowling.length} bowling records in scoreboard ${index}`);
+            allBowling.push(...scoreboard.bowling);
+          }
+        });
+        if (allBowling.length > 0) {
+          bowlingData = allBowling;
+          console.log(`[Transformer] Extracted ${allBowling.length} bowling records from scoreboards`);
+        }
+      }
+      
+      if (!bowlingData || !Array.isArray(bowlingData) || bowlingData.length === 0) {
+        console.log('[Transformer] No bowling data found');
+        return undefined;
+      }
+      
+      console.log(`[Transformer] Processing ${bowlingData.length} bowling records`);
+      
+      return bowlingData
+        .filter((b: any) => (b.overs || b.wickets) && (b.overs > 0 || b.wickets > 0))
+        .map((b: any) => {
+          // Player name - try to get from included player data, otherwise use player_id
+          let playerName = `Player ${b.player_id || 'Unknown'}`;
+          if (b.player) {
+            if (typeof b.player === 'object') {
+              playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
+            } else if (typeof b.player === 'string') {
+              playerName = b.player;
             }
-            
-            return {
-              playerId: b.player_id?.toString(),
-              playerName,
-              overs: parseFloat(b.overs?.toString() || '0') || 0,
-              maidens: b.maidens || 0,
-              runs: b.runs || 0,
-              wickets: b.wickets || 0,
-              economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
-              teamId: b.team_id?.toString(),
-              teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
-            };
-          })
-          .sort((a: any, b: any) => b.wickets - a.wickets || a.economy - b.economy) // Sort by wickets, then economy
-      : undefined,
+          }
+          
+          return {
+            playerId: b.player_id?.toString(),
+            playerName,
+            overs: parseFloat(b.overs?.toString() || '0') || 0,
+            maidens: b.maidens || 0,
+            runs: b.runs || 0,
+            wickets: b.wickets || 0,
+            economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
+            teamId: b.team_id?.toString(),
+            teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+          };
+        })
+        .sort((a: any, b: any) => b.wickets - a.wickets || a.economy - b.economy); // Sort by wickets, then economy
+    })(),
   };
 }
 

@@ -63,6 +63,116 @@ export class CricketService {
   }
 
   /**
+   * Enrich player names in match data by fetching player details from API
+   */
+  private async enrichPlayerNames(matchData: any): Promise<any> {
+    try {
+      if (!matchData.batting && !matchData.bowling && !matchData.currentBatters && !matchData.currentBowlers && !matchData.lastWicket) {
+        return matchData; // No player data to enrich
+      }
+
+      // Collect all unique player IDs
+      const playerIds = new Set<string>();
+      if (matchData.batting) {
+        matchData.batting.forEach((b: any) => {
+          if (b.playerId) playerIds.add(b.playerId);
+        });
+      }
+      if (matchData.bowling) {
+        matchData.bowling.forEach((b: any) => {
+          if (b.playerId) playerIds.add(b.playerId);
+        });
+      }
+      if (matchData.currentBatters) {
+        matchData.currentBatters.forEach((b: any) => {
+          if (b.playerId) playerIds.add(b.playerId);
+        });
+      }
+      if (matchData.currentBowlers) {
+        matchData.currentBowlers.forEach((b: any) => {
+          if (b.playerId) playerIds.add(b.playerId);
+        });
+      }
+      if (matchData.lastWicket && matchData.lastWicket.playerId) {
+        playerIds.add(matchData.lastWicket.playerId);
+      }
+
+      if (playerIds.size === 0) {
+        return matchData; // No player IDs to fetch
+      }
+
+      this.logger.log(`Enriching ${playerIds.size} player names for match ${matchData.matchId}`, 'CricketService');
+
+      // Fetch player names in parallel
+      const playerPromises = Array.from(playerIds).map(playerId => 
+        this.sportsMonksService.getPlayerDetails(playerId)
+          .then(player => ({ playerId, player }))
+          .catch((error) => {
+            this.logger.warn(`Failed to fetch player ${playerId}: ${error.message}`, 'CricketService');
+            return { playerId, player: null };
+          })
+      );
+      
+      const playerData = await Promise.all(playerPromises);
+      const playerMap = new Map<string, string>();
+      
+      playerData.forEach(({ playerId, player }) => {
+        if (player) {
+          const name = player.fullname || player.name || player.firstname || `Player ${playerId}`;
+          playerMap.set(playerId, name);
+          this.logger.log(`Fetched player name: ${playerId} -> ${name}`, 'CricketService');
+        }
+      });
+
+      // Update player names in batting stats
+      if (matchData.batting) {
+        matchData.batting = matchData.batting.map((b: any) => ({
+          ...b,
+          playerName: playerMap.get(b.playerId) || b.playerName,
+        }));
+      }
+
+      // Update player names in bowling stats
+      if (matchData.bowling) {
+        matchData.bowling = matchData.bowling.map((b: any) => ({
+          ...b,
+          playerName: playerMap.get(b.playerId) || b.playerName,
+        }));
+      }
+
+      // Update player names in current batters
+      if (matchData.currentBatters) {
+        matchData.currentBatters = matchData.currentBatters.map((b: any) => ({
+          ...b,
+          playerName: playerMap.get(b.playerId) || b.playerName,
+        }));
+      }
+
+      // Update player names in current bowlers
+      if (matchData.currentBowlers) {
+        matchData.currentBowlers = matchData.currentBowlers.map((b: any) => ({
+          ...b,
+          playerName: playerMap.get(b.playerId) || b.playerName,
+        }));
+      }
+
+      // Update player name in last wicket
+      if (matchData.lastWicket && matchData.lastWicket.playerId) {
+        const lastWicketPlayerName = playerMap.get(matchData.lastWicket.playerId);
+        if (lastWicketPlayerName) {
+          matchData.lastWicket.playerName = lastWicketPlayerName;
+        }
+      }
+
+      this.logger.log(`Enriched ${playerMap.size} player names for match ${matchData.matchId}`, 'CricketService');
+      return matchData;
+    } catch (error: any) {
+      this.logger.error(`Error enriching player names for match ${matchData.matchId}: ${error.message}`, error.stack, 'CricketService');
+      return matchData; // Return original data if enrichment fails
+    }
+  }
+
+  /**
    * Save or update a match in the database
    * This method is called automatically when live matches are fetched
    */
@@ -146,14 +256,19 @@ export class CricketService {
           
           // Save all live matches to database
           if (liveMatches.length > 0) {
+            // Enrich player names for all live matches
+            const enrichedMatches = await Promise.all(
+              liveMatches.map((match) => this.enrichPlayerNames(match))
+            );
+            
             // Save matches to database asynchronously (don't wait)
             Promise.all(
-              liveMatches.map((match) => this.saveMatchToDatabase(match))
+              enrichedMatches.map((match) => this.saveMatchToDatabase(match))
             ).catch((error) => {
               this.logger.error('Error saving live matches to database', error, 'CricketService');
             });
 
-            const sample = liveMatches.slice(0, 3).map((m: any) => ({
+            const sample = enrichedMatches.slice(0, 3).map((m: any) => ({
               id: m.matchId,
               status: m.status,
               name: m.name,
@@ -161,7 +276,7 @@ export class CricketService {
               ended: m.matchEnded,
             }));
             this.logger.log(`Sample live matches: ${JSON.stringify(sample, null, 2)}`, 'CricketService');
-            return liveMatches;
+            return enrichedMatches;
           } else if (transformedMatches.length > 0) {
             // Log what we got if no live matches found
             const sample = transformedMatches.slice(0, 3).map((m: any) => ({
@@ -392,19 +507,30 @@ export class CricketService {
         (match) => match.status === 'completed' || match.matchEnded,
       );
       
-      // Save all completed matches to database (async, don't wait)
+      // Enrich player names and save all completed matches to database
+      let matchesToUse = completedMatches;
       if (completedMatches.length > 0) {
+        // Enrich player names for completed matches (in batches to avoid too many API calls)
+        const enrichedMatches = await Promise.all(
+          completedMatches.map((match) => this.enrichPlayerNames(match))
+        );
+        
+        // Save enriched matches to database (async, don't wait)
         Promise.all(
-          completedMatches.map((match) => this.saveMatchToDatabase(match))
+          enrichedMatches.map((match) => this.saveMatchToDatabase(match))
         ).catch((error) => {
           this.logger.error('Error saving completed matches to database', error, 'CricketService');
         });
+        
+        // Use enriched matches
+        matchesToUse = enrichedMatches.filter(
+          (match) => match.status === 'completed' || match.matchEnded,
+        );
       }
       
       // If no matches after status filter, try to include all transformed matches
       // (the service already filtered for completed, so all should be completed)
-      let matchesToUse = completedMatches;
-      if (completedMatches.length === 0 && transformedMatches.length > 0) {
+      if (completedMatches.length === 0 && transformedMatches.length > 0 && matchesToUse.length === 0) {
         this.logger.warn(`No matches with status='completed' after transformation, but ${transformedMatches.length} matches were returned from API. Using all transformed matches and marking as completed.`, 'CricketService');
         // Force all matches to be marked as completed since they came from getCompletedMatches
         transformedMatches.forEach((match: any) => {
@@ -561,18 +687,30 @@ export class CricketService {
             const apiMatch = await this.sportsMonksService.getMatchDetails(id, 'cricket');
             if (apiMatch && apiMatch.id) {
               const transformedMatch = transformSportsMonksMatchToFrontend(apiMatch, 'cricket');
-              // Update database with fresh data
-              await this.saveMatchToDatabase(transformedMatch);
-              // Return fresh data
-              return transformedMatch;
+              
+              // Log current batters/bowlers and batting/bowling data for debugging
+              this.logger.log(`Match ${id} transformed - currentBatters: ${transformedMatch.currentBatters?.length || 0}, currentBowlers: ${transformedMatch.currentBowlers?.length || 0}`, 'CricketService');
+              this.logger.log(`Match ${id} transformed - batting: ${transformedMatch.batting?.length || 0}, bowling: ${transformedMatch.bowling?.length || 0}`, 'CricketService');
+              
+              // Enrich player names before returning
+              const enrichedMatch = await this.enrichPlayerNames(transformedMatch);
+              
+              // Update database with fresh data (async, don't wait)
+              this.saveMatchToDatabase(enrichedMatch).catch((error) => {
+                this.logger.error(`Error saving match ${id} to database`, error, 'CricketService');
+              });
+              
+              // Return fresh data with enriched player names
+              return enrichedMatch;
             }
           } catch (apiError: any) {
             this.logger.warn(`Could not fetch fresh data for live match ${id}, using database data`, 'CricketService');
           }
         }
         
-        // Return database match (either completed or live if API failed)
-        return dbMatch;
+        // Enrich player names for database match (especially if it's live and API failed)
+        const enrichedDbMatch = await this.enrichPlayerNames(dbMatch);
+        return enrichedDbMatch;
       }
 
       // Match not in database, try API
@@ -601,108 +739,38 @@ export class CricketService {
         if (!apiMatch || !apiMatch.id) {
           this.logger.warn(`No match data returned from API for ${id}`, 'CricketService');
           throw new NotFoundException(`Match with ID ${id} not found`);
-        } else {
-          let transformedMatch = transformSportsMonksMatchToFrontend(apiMatch, 'cricket');
-          
-          // Validate transformed match has required fields
-          if (!transformedMatch || !transformedMatch.matchId) {
-            this.logger.warn(`Failed to transform match data for ${id}, trying database fallback...`, 'CricketService');
-            // Don't throw here, fall through to database fallback
           } else {
-            // Successfully got match from API, save to database and enrich
+            let transformedMatch = transformSportsMonksMatchToFrontend(apiMatch, 'cricket');
+            
+            // Log batting/bowling data for debugging
+            if (transformedMatch.batting) {
+              this.logger.log(`Match ${id} has ${transformedMatch.batting.length} batting records`, 'CricketService');
+            }
+            if (transformedMatch.bowling) {
+              this.logger.log(`Match ${id} has ${transformedMatch.bowling.length} bowling records`, 'CricketService');
+            }
+            
+            // Validate transformed match has required fields
+            if (!transformedMatch || !transformedMatch.matchId) {
+              this.logger.warn(`Failed to transform match data for ${id}, trying database fallback...`, 'CricketService');
+              // Don't throw here, fall through to database fallback
+            } else {
+              // Successfully got match from API, save to database and enrich
+              // Save match to database (async, don't wait)
+              this.saveMatchToDatabase(transformedMatch).catch((error) => {
+                this.logger.error(`Error saving match ${id} to database`, error, 'CricketService');
+              });
+
+            // Enrich player names before returning
+            const enrichedMatch = await this.enrichPlayerNames(transformedMatch);
+            
             // Save match to database (async, don't wait)
-            this.saveMatchToDatabase(transformedMatch).catch((error) => {
+            this.saveMatchToDatabase(enrichedMatch).catch((error) => {
               this.logger.error(`Error saving match ${id} to database`, error, 'CricketService');
             });
 
-            // Enrich player names if batting/bowling data exists
-            if (transformedMatch.batting || transformedMatch.bowling || transformedMatch.currentBatters || transformedMatch.currentBowlers || transformedMatch.lastWicket) {
-              // Collect all unique player IDs
-              const playerIds = new Set<string>();
-              if (transformedMatch.batting) {
-                transformedMatch.batting.forEach((b: any) => {
-                  if (b.playerId) playerIds.add(b.playerId);
-                });
-              }
-              if (transformedMatch.bowling) {
-                transformedMatch.bowling.forEach((b: any) => {
-                  if (b.playerId) playerIds.add(b.playerId);
-                });
-              }
-              if (transformedMatch.currentBatters) {
-                transformedMatch.currentBatters.forEach((b: any) => {
-                  if (b.playerId) playerIds.add(b.playerId);
-                });
-              }
-              if (transformedMatch.currentBowlers) {
-                transformedMatch.currentBowlers.forEach((b: any) => {
-                  if (b.playerId) playerIds.add(b.playerId);
-                });
-              }
-              if (transformedMatch.lastWicket && transformedMatch.lastWicket.playerId) {
-                playerIds.add(transformedMatch.lastWicket.playerId);
-              }
-
-              // Fetch player names in parallel
-              const playerPromises = Array.from(playerIds).map(playerId => 
-                this.sportsMonksService.getPlayerDetails(playerId)
-                  .then(player => ({ playerId, player }))
-                  .catch(() => ({ playerId, player: null }))
-              );
-              
-              const playerData = await Promise.all(playerPromises);
-              const playerMap = new Map<string, string>();
-              
-              playerData.forEach(({ playerId, player }) => {
-                if (player) {
-                  const name = player.fullname || player.name || player.firstname || `Player ${playerId}`;
-                  playerMap.set(playerId, name);
-                }
-              });
-
-              // Update player names in batting stats
-              if (transformedMatch.batting) {
-                transformedMatch.batting = transformedMatch.batting.map((b: any) => ({
-                  ...b,
-                  playerName: playerMap.get(b.playerId) || b.playerName,
-                }));
-              }
-
-              // Update player names in bowling stats
-              if (transformedMatch.bowling) {
-                transformedMatch.bowling = transformedMatch.bowling.map((b: any) => ({
-                  ...b,
-                  playerName: playerMap.get(b.playerId) || b.playerName,
-                }));
-              }
-
-              // Update player names in current batters
-              if (transformedMatch.currentBatters) {
-                transformedMatch.currentBatters = transformedMatch.currentBatters.map((b: any) => ({
-                  ...b,
-                  playerName: playerMap.get(b.playerId) || b.playerName,
-                }));
-              }
-
-              // Update player names in current bowlers
-              if (transformedMatch.currentBowlers) {
-                transformedMatch.currentBowlers = transformedMatch.currentBowlers.map((b: any) => ({
-                  ...b,
-                  playerName: playerMap.get(b.playerId) || b.playerName,
-                }));
-              }
-
-              // Update player name in last wicket
-              if (transformedMatch.lastWicket && transformedMatch.lastWicket.playerId) {
-                const lastWicketPlayerName = playerMap.get(transformedMatch.lastWicket.playerId);
-                if (lastWicketPlayerName) {
-                  transformedMatch.lastWicket.playerName = lastWicketPlayerName;
-                }
-              }
-            }
-
-            // No caching - return fresh data
-            return transformedMatch;
+            // No caching - return fresh data with enriched player names
+            return enrichedMatch;
           }
         }
       } catch (apiError: any) {
