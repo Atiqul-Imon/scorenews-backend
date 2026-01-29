@@ -185,6 +185,41 @@ export class CricketMatch {
   @Prop()
   endingAt?: Date;
 
+  // Additional API fields for completed matches
+  @Prop()
+  apiNote?: string; // Raw result note from API
+
+  @Prop()
+  tossWonTeamId?: string; // Team ID that won the toss
+
+  @Prop()
+  manOfMatchId?: string; // Player ID for Man of the Match
+
+  @Prop()
+  manOfSeriesId?: string; // Player ID for Man of the Series
+
+  @Prop()
+  totalOversPlayed?: number; // Total overs played in the match
+
+  @Prop({ default: false })
+  superOver?: boolean; // Super over indicator
+
+  @Prop({ default: false })
+  followOn?: boolean; // Follow-on indicator
+
+  @Prop({ default: false })
+  drawNoResult?: boolean; // Draw/no result indicator
+
+  // Data source tracking
+  @Prop({ enum: ['api', 'calculated'], default: 'calculated' })
+  dataSource?: 'api' | 'calculated'; // Source of result data
+
+  @Prop()
+  apiFetchedAt?: Date; // Timestamp when data was fetched from API
+
+  @Prop({ default: false })
+  isCompleteData?: boolean; // Flag indicating if all API data is saved
+
   // Current batters and bowlers for live matches
   @Prop({
     type: [
