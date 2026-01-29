@@ -382,25 +382,77 @@ export class CricketService {
       const sportMonksToken = this.configService.get<string>('SPORTMONKS_API_TOKEN');
       if (sportMonksToken) {
         try {
-          this.logger.log('Fetching live cricket matches from SportMonks...', 'CricketService');
+          this.logger.log('🔵 Fetching live cricket matches from SportMonks...', 'CricketService');
           const apiMatches = await this.sportsMonksService.getLiveMatches('cricket');
-          this.logger.log(`SportMonks returned ${apiMatches.length} raw matches`, 'CricketService');
+          this.logger.log(`🔵 SportMonks returned ${apiMatches.length} raw matches`, 'CricketService');
           
-          const transformedMatches = apiMatches.map((match: any) =>
-            transformSportsMonksMatchToFrontend(match, 'cricket'),
-          );
+          if (apiMatches.length === 0) {
+            this.logger.warn('⚠️  No raw matches returned from SportsMonks API!', 'CricketService');
+            // Don't return empty array yet - try fallback APIs
+          } else {
+            // Log sample of raw matches for debugging
+            const sampleRaw = apiMatches.slice(0, 3).map((m: any) => ({
+              id: m.id,
+              name: m.name || `${m.localteam?.name} vs ${m.visitorteam?.name}`,
+              live: m.live,
+              status: m.status,
+              state_id: m.state_id,
+              starting_at: m.starting_at,
+            }));
+            this.logger.log(`🔵 Sample raw matches from API: ${JSON.stringify(sampleRaw, null, 2)}`, 'CricketService');
+          }
+          
+          const transformedMatches = apiMatches.map((match: any) => {
+            try {
+              const transformed = transformSportsMonksMatchToFrontend(match, 'cricket');
+              if (!transformed) {
+                this.logger.warn(`⚠️  Transformation returned null for match ${match.id}`, 'CricketService');
+              }
+              return transformed;
+            } catch (error: any) {
+              this.logger.error(`❌ Error transforming match ${match.id}: ${error.message}`, error.stack, 'CricketService');
+              return null;
+            }
+          }).filter((m: any) => m !== null);
+          
+          this.logger.log(`🔵 Transformed ${transformedMatches.length} matches (from ${apiMatches.length} raw)`, 'CricketService');
+          
+          if (transformedMatches.length === 0 && apiMatches.length > 0) {
+            this.logger.error(`❌ CRITICAL: All ${apiMatches.length} raw matches failed transformation!`, 'CricketService');
+          }
+          
+          // Log sample of transformed matches with full details
+          if (transformedMatches.length > 0) {
+            const sampleTransformed = transformedMatches.slice(0, 3).map((m: any) => ({
+              id: m.matchId,
+              name: m.name,
+              status: m.status,
+              matchStarted: m.matchStarted,
+              matchEnded: m.matchEnded,
+              startTime: m.startTime,
+              hasScore: !!(m.currentScore?.home?.runs > 0 || m.currentScore?.away?.runs > 0),
+              currentScore: m.currentScore,
+              format: m.format,
+            }));
+            this.logger.log(`Sample transformed matches: ${JSON.stringify(sampleTransformed, null, 2)}`, 'CricketService');
+          } else {
+            this.logger.warn(`No transformed matches! Raw matches: ${apiMatches.length}`, 'CricketService');
+          }
           
           // Filter for live matches - be more lenient to catch all live matches
-          // But exclude matches where both innings are complete
+          // CRITICAL: Matches from livescores endpoint should be considered live by default
+          // Only exclude matches that are explicitly completed or both innings finished
           const liveMatches = transformedMatches.filter((match) => {
-            // First check: if status is explicitly completed, exclude
-            if (match.status === 'completed' || match.matchEnded) {
+            // First check: if status is explicitly completed AND match has ended, exclude
+            if (match.status === 'completed' && match.matchEnded) {
+              this.logger.log(`Excluding match ${match.matchId}: explicitly completed and ended`, 'CricketService');
               return false;
             }
             
-            // Second check: if status is live, verify both innings aren't complete
-            if (match.status === 'live' || (match.matchStarted && !match.matchEnded)) {
-              // Check if both innings are complete based on scorecard
+            // CRITICAL: If status is 'live', always include (matches from livescores endpoint)
+            // This is the most important check - matches from livescores are live by definition
+            if (match.status === 'live') {
+              // Only exclude if both innings are complete
               if (match.currentScore) {
                 const matchType = (match.format || '').toLowerCase();
                 const isT20 = matchType.includes('t20');
@@ -420,82 +472,190 @@ export class CricketService {
                 }
               }
               
+              this.logger.log(`✅ Including match ${match.matchId} as live: status=live`, 'CricketService');
               return true;
             }
             
-            // For upcoming matches, check if they've started
+            // Third check: if match has started and not ended, include it
+            if (match.matchStarted && !match.matchEnded) {
+              this.logger.log(`✅ Including match ${match.matchId} as live: matchStarted=true, matchEnded=false`, 'CricketService');
+              return true;
+            }
+            
+            // Fourth check: if match has started (by time) and has score data, include it
             if (match.startTime && new Date(match.startTime) <= new Date() && !match.matchEnded) {
-              return true;
+              // If match has score data, it's definitely live
+              if (match.currentScore && (match.currentScore.home?.runs > 0 || match.currentScore.away?.runs > 0)) {
+                this.logger.log(`✅ Including match ${match.matchId} as live: has started with score data`, 'CricketService');
+                return true;
+              }
+              // If match started recently (within last 8 hours), consider it live
+              const startTime = new Date(match.startTime);
+              const hoursSinceStart = (Date.now() - startTime.getTime()) / (1000 * 60 * 60);
+              if (hoursSinceStart <= 8 && hoursSinceStart >= 0) {
+                this.logger.log(`✅ Including match ${match.matchId} as live: started ${hoursSinceStart.toFixed(1)} hours ago`, 'CricketService');
+                return true;
+              }
             }
             
+            // Log why match was excluded (only in debug mode to avoid log spam)
+            if (process.env.NODE_ENV === 'development') {
+              this.logger.log(`Excluding match ${match.matchId}: status=${match.status}, matchStarted=${match.matchStarted}, matchEnded=${match.matchEnded}`, 'CricketService');
+            }
             return false;
           });
 
           this.logger.log(`Found ${liveMatches.length} live matches after transformation`, 'CricketService');
           
-          // Save all live matches to database
           if (liveMatches.length > 0) {
-            // Separate live matches from matches that just completed
-            const stillLiveMatches: any[] = [];
-            const completedMatches: any[] = [];
+            // Check for matches that transitioned from live to completed
+            // Compare with database to detect newly completed matches
+            const matchIds = liveMatches.map((m: any) => m.matchId);
+            let existingMatches: any[] = [];
+            let existingStatusMap = new Map<string, string>();
             
-            liveMatches.forEach((match) => {
-              if (match.status === 'completed' || match.matchEnded) {
-                completedMatches.push(match);
-              } else {
-                stillLiveMatches.push(match);
-              }
-            });
-            
-            // Enrich player names for all matches
-            const allMatches = [...stillLiveMatches, ...completedMatches];
-            const enrichedMatches = await Promise.all(
-              allMatches.map((match) => this.enrichPlayerNames(match))
-            );
-            
-            // For completed matches, ensure result is calculated before saving
-            const matchesToSave = enrichedMatches.map((match) => {
-              if (match.status === 'completed' && !match.result && match.currentScore) {
-                const calculatedResult = this.calculateMatchResultFromData(match);
-                if (calculatedResult) {
-                  match.result = calculatedResult;
-                }
-              }
-              return match;
-            });
-            
-            // Save matches to database
-            // For completed matches, save synchronously to ensure they're properly stored
-            if (completedMatches.length > 0) {
-              this.logger.log(`Saving ${completedMatches.length} completed match(es) to database with full data`, 'CricketService');
-              await Promise.all(
-                matchesToSave
-                  .filter((match) => match.status === 'completed')
-                  .map((match) => this.saveMatchToDatabase(match))
+            try {
+              existingMatches = await this.cricketMatchModel
+                .find({ matchId: { $in: matchIds } })
+                .select('matchId status')
+                .lean();
+              
+              existingStatusMap = new Map(
+                existingMatches.map((m: any) => [m.matchId, m.status])
               );
+              this.logger.log(`Found ${existingMatches.length} existing matches in database for comparison`, 'CricketService');
+            } catch (dbError: any) {
+              this.logger.warn(`Error querying database for existing matches: ${dbError.message}`, 'CricketService');
+              // Continue without database comparison - treat all as new
             }
             
-            // Save live matches asynchronously (don't wait)
-            Promise.all(
-              matchesToSave
-                .filter((match) => match.status !== 'completed')
-                .map((match) => this.saveMatchToDatabase(match))
-            ).catch((error) => {
-              this.logger.error('Error saving live matches to database', error, 'CricketService');
+            // Separate truly live matches from newly completed ones
+            const stillLiveMatches: any[] = [];
+            const newlyCompletedMatches: any[] = [];
+            
+            liveMatches.forEach((match) => {
+              // Only check for completion transition if we have database data
+              const previousStatus = existingStatusMap.get(match.matchId);
+              const isNewlyCompleted = (match.status === 'completed' || match.matchEnded) && 
+                                      previousStatus !== 'completed' &&
+                                      previousStatus !== undefined; // Only if we had previous status
+              
+              if (isNewlyCompleted) {
+                newlyCompletedMatches.push(match);
+                this.logger.log(`Match ${match.matchId} transitioned to completed - will save to database`, 'CricketService');
+              } else if (match.status !== 'completed' && !match.matchEnded) {
+                // Include all matches that are not completed and not ended
+                // This includes live matches and matches that just started
+                stillLiveMatches.push(match);
+                this.logger.log(`Match ${match.matchId} is live (status: ${match.status}, previousStatus: ${previousStatus || 'new'})`, 'CricketService');
+              } else {
+                this.logger.log(`Match ${match.matchId} excluded: status=${match.status}, matchEnded=${match.matchEnded}`, 'CricketService');
+              }
             });
             
-            // Return only live matches (for API response)
-            const returnMatches = matchesToSave.filter((match) => match.status !== 'completed');
-
-            const sample = returnMatches.slice(0, 3).map((m: any) => ({
-              id: m.matchId,
-              status: m.status,
-              name: m.name,
-              started: m.matchStarted,
-              ended: m.matchEnded,
-            }));
-            this.logger.log(`Sample live matches: ${JSON.stringify(sample, null, 2)}`, 'CricketService');
-            return returnMatches;
+            this.logger.log(`Separated matches: ${stillLiveMatches.length} still live, ${newlyCompletedMatches.length} newly completed`, 'CricketService');
+            
+            // If no live matches after separation, something is wrong - log details
+            if (stillLiveMatches.length === 0 && liveMatches.length > 0) {
+              this.logger.error(`CRITICAL: All ${liveMatches.length} live matches were filtered out!`, 'CricketService');
+              const details = liveMatches.map((m: any) => ({
+                id: m.matchId,
+                name: m.name,
+                status: m.status,
+                matchStarted: m.matchStarted,
+                matchEnded: m.matchEnded,
+                currentScore: m.currentScore,
+              }));
+              this.logger.error(`Filtered matches details: ${JSON.stringify(details, null, 2)}`, 'CricketService');
+            }
+            
+            // CRITICAL: Return live matches immediately without waiting for enrichment
+            // Enrichment and database saves happen in background
+            // This ensures frontend gets live data quickly from SportsMonks API
+            
+            // Create a copy of live matches to return (don't wait for enrichment)
+            const liveMatchesToReturn = stillLiveMatches.map((match) => {
+              // Return match as-is, enrichment will happen in background
+              return {
+                ...match,
+                // Ensure all required fields are present
+                _id: match._id || match.matchId,
+                matchId: match.matchId,
+                status: match.status || 'live',
+              };
+            });
+            
+            this.logger.log(`✅ Returning ${liveMatchesToReturn.length} live matches immediately (from ${stillLiveMatches.length} still live matches)`, 'CricketService');
+            
+            if (liveMatchesToReturn.length > 0) {
+              const sample = liveMatchesToReturn.slice(0, 3).map((m: any) => ({
+                id: m.matchId,
+                status: m.status,
+                name: m.name,
+                teams: `${m.teams?.home?.name} vs ${m.teams?.away?.name}`,
+                started: m.matchStarted,
+                ended: m.matchEnded,
+                hasScore: !!(m.currentScore?.home?.runs > 0 || m.currentScore?.away?.runs > 0),
+                score: m.currentScore ? `${m.currentScore.home?.runs || 0}/${m.currentScore.home?.wickets || 0} vs ${m.currentScore.away?.runs || 0}/${m.currentScore.away?.wickets || 0}` : 'No score',
+              }));
+              this.logger.log(`Live matches to return: ${JSON.stringify(sample, null, 2)}`, 'CricketService');
+            } else {
+              this.logger.error(`❌ CRITICAL: No live matches to return! stillLiveMatches.length=${stillLiveMatches.length}`, 'CricketService');
+            }
+            
+            // Enrich and save in background (don't block the return)
+            const stillLiveMatchIds = new Set(stillLiveMatches.map((m: any) => m.matchId));
+            const allMatches = [...stillLiveMatches, ...newlyCompletedMatches];
+            
+            // Start enrichment in background
+            Promise.all(
+              allMatches.map((match) => this.enrichPlayerNames(match))
+            ).then((enrichedMatches) => {
+              // For completed matches, ensure result is calculated before saving
+              const matchesToSave = enrichedMatches.map((match) => {
+                if (match.status === 'completed' && !match.result && match.currentScore) {
+                  const calculatedResult = this.calculateMatchResultFromData(match);
+                  if (calculatedResult) {
+                    match.result = calculatedResult;
+                  }
+                }
+                return match;
+              });
+              
+              // Save newly completed matches to database
+              const completedToSave = matchesToSave.filter((match) => 
+                newlyCompletedMatches.some((m: any) => m.matchId === match.matchId)
+              );
+              
+              if (completedToSave.length > 0) {
+                this.logger.log(`Saving ${completedToSave.length} newly completed match(es) to database`, 'CricketService');
+                Promise.all(
+                  completedToSave.map((match) => this.saveMatchToDatabase(match))
+                ).then(() => {
+                  this.logger.log(`✅ Successfully saved ${completedToSave.length} completed match(es) to MongoDB`, 'CricketService');
+                }).catch((error) => {
+                  this.logger.error('Error saving completed matches', error, 'CricketService');
+                });
+              }
+              
+              // Save/update live matches to database asynchronously
+              const liveMatchesToSave = matchesToSave.filter((match) => 
+                stillLiveMatchIds.has(match.matchId)
+              );
+              
+              if (liveMatchesToSave.length > 0) {
+                Promise.all(
+                  liveMatchesToSave.map((match) => this.saveMatchToDatabase(match))
+                ).catch((error) => {
+                  this.logger.error('Error saving live matches to database', error, 'CricketService');
+                });
+              }
+            }).catch((error) => {
+              this.logger.error('Error enriching player names (non-blocking)', error, 'CricketService');
+            });
+            
+            // Return immediately - don't wait for enrichment or database saves
+            return liveMatchesToReturn;
           } else if (transformedMatches.length > 0) {
             // Log what we got if no live matches found
             const sample = transformedMatches.slice(0, 3).map((m: any) => ({
@@ -506,6 +666,13 @@ export class CricketService {
               ended: m.matchEnded,
             }));
             this.logger.warn(`No live matches found, but got ${transformedMatches.length} matches. Sample: ${JSON.stringify(sample, null, 2)}`, 'CricketService');
+            // Still save any matches to database even if not live (they might be completed)
+            Promise.all(
+              transformedMatches.map((match: any) => this.saveMatchToDatabase(match))
+            ).catch((error) => {
+              this.logger.error('Error saving matches to database', error, 'CricketService');
+            });
+            return [];
           }
         } catch (sportsmonksError: any) {
           if (sportsmonksError.response?.status === 403) {
@@ -697,7 +864,8 @@ export class CricketService {
     const { page = 1, limit = 20, format, series, startDate, endDate } = filters;
 
     try {
-      // First, try to get completed matches from database
+      // ALWAYS prioritize database for completed matches
+      // This ensures we show data from our own database once matches are saved
       const skip = (page - 1) * limit;
       const dbFilter: any = { status: 'completed' };
       if (format) dbFilter.format = format;
@@ -717,9 +885,9 @@ export class CricketService {
 
       const dbTotal = await this.cricketMatchModel.countDocuments(dbFilter);
 
-      // If we have matches in database, calculate results for those that don't have them
+      // If we have matches in database, use them (even if only a few)
       if (dbMatches.length > 0) {
-        this.logger.log(`Found ${dbMatches.length} completed matches in database`, 'CricketService');
+        this.logger.log(`Found ${dbMatches.length} completed matches in database (total: ${dbTotal})`, 'CricketService');
         
         // Calculate results for matches that don't have them
         const matchesWithResults = await Promise.all(
@@ -741,6 +909,7 @@ export class CricketService {
           })
         );
         
+        // Return database matches (our own data)
         return {
           success: true,
           data: {
@@ -755,8 +924,9 @@ export class CricketService {
         };
       }
 
-      // No matches in database, fetch from API and save them
-      this.logger.log('No completed matches in database, fetching from SportsMonks API...', 'CricketService');
+      // Only fetch from API if database is completely empty
+      // This should rarely happen once matches start being saved
+      this.logger.log('No completed matches in database, fetching from SportsMonks API as fallback...', 'CricketService');
 
       let apiMatches: any[] = [];
       try {
