@@ -353,6 +353,25 @@ export class CricketMatch {
     home: number;
     away: number;
   };
+
+  // Match result information (calculated when match is completed)
+  @Prop({
+    type: {
+      winner: { type: String }, // 'home' or 'away'
+      winnerName: { type: String },
+      margin: { type: Number }, // Margin value (runs or wickets)
+      marginType: { type: String, enum: ['runs', 'wickets'] }, // Type of margin
+      resultText: { type: String }, // Full result text like "New Zealand won by 50 runs"
+    },
+    required: false,
+  })
+  result?: {
+    winner: 'home' | 'away';
+    winnerName: string;
+    margin: number;
+    marginType: 'runs' | 'wickets';
+    resultText: string;
+  };
 }
 
 export const CricketMatchSchema = SchemaFactory.createForClass(CricketMatch);

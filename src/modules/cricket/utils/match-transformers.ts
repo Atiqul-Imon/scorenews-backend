@@ -1,3 +1,139 @@
+/**
+ * Extract player name from various possible API response structures
+ * Checks multiple locations where player data might be stored
+ */
+function extractPlayerName(playerData: any, playerId?: any): string {
+  if (!playerData && !playerId) {
+    return 'Unknown Player';
+  }
+
+  // If playerData is a string, use it directly
+  if (typeof playerData === 'string' && playerData.trim()) {
+    return playerData;
+  }
+
+  // If playerData is an object, check various possible fields
+  if (typeof playerData === 'object' && playerData !== null) {
+    // Check for nested data structure (API might return { data: { ... } })
+    const actualData = playerData.data || playerData;
+    
+    // Try common field names for player names
+    const name = actualData.fullname || 
+                 actualData.full_name || 
+                 actualData.name || 
+                 actualData.firstname || 
+                 actualData.first_name ||
+                 (actualData.firstname && actualData.lastname ? `${actualData.firstname} ${actualData.lastname}` : null) ||
+                 (actualData.first_name && actualData.last_name ? `${actualData.first_name} ${actualData.last_name}` : null);
+    
+    if (name && typeof name === 'string' && name.trim()) {
+      return name.trim();
+    }
+  }
+
+  // Fallback to player ID if no name found
+  return `Player ${playerId || 'Unknown'}`;
+}
+
+/**
+ * Calculate match result for completed matches
+ * Determines winner, margin, and margin type (runs or wickets) based on batting order
+ */
+export function calculateMatchResult(
+  currentScore: any,
+  scores: any[],
+  teams: any,
+  localteamId: any,
+  visitorteamId: any,
+  isV2Format: boolean
+): any {
+  try {
+    const homeRuns = currentScore.home?.runs || 0;
+    const awayRuns = currentScore.away?.runs || 0;
+    const homeWickets = currentScore.home?.wickets ?? 10;
+    const awayWickets = currentScore.away?.wickets ?? 10;
+
+    // Determine which team batted first based on scoreboard order
+    // S1 = first innings, S2 = second innings
+    let firstInningsTeam: 'home' | 'away' | null = null;
+    let secondInningsTeam: 'home' | 'away' | null = null;
+
+    if (isV2Format && scores.length >= 2) {
+      // Find S1 (first innings) and S2 (second innings)
+      const firstInnings = scores.find((s: any) => s.scoreboard === 'S1');
+      const secondInnings = scores.find((s: any) => s.scoreboard === 'S2');
+
+      if (firstInnings && secondInnings) {
+        if (firstInnings.team_id === localteamId) {
+          firstInningsTeam = 'home';
+          secondInningsTeam = 'away';
+        } else if (firstInnings.team_id === visitorteamId) {
+          firstInningsTeam = 'away';
+          secondInningsTeam = 'home';
+        }
+      }
+    }
+
+    // Determine winner
+    const homeWon = homeRuns > awayRuns;
+    const winner = homeWon ? 'home' : 'away';
+    const winnerName = homeWon ? teams.home.name : teams.away.name;
+    const winnerScore = homeWon ? currentScore.home : currentScore.away;
+    const winnerWickets = winnerScore?.wickets ?? 10;
+
+    // Calculate margin
+    const margin = Math.abs(homeRuns - awayRuns);
+    let marginType: 'runs' | 'wickets' = 'runs';
+    let resultText = '';
+
+    // Determine margin type based on batting order
+    if (firstInningsTeam && secondInningsTeam) {
+      // We know batting order
+      if (winner === firstInningsTeam) {
+        // Team batting first won - always by runs
+        marginType = 'runs';
+        resultText = `${winnerName} won by ${margin} runs`;
+      } else {
+        // Team batting second won
+        if (winnerWickets < 10) {
+          // Winner has wickets remaining - won by wickets
+          const wicketsRemaining = 10 - winnerWickets;
+          marginType = 'wickets';
+          resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
+        } else {
+          // Winner lost all wickets but still won (rare) - won by runs
+          marginType = 'runs';
+          resultText = `${winnerName} won by ${margin} runs`;
+        }
+      }
+    } else {
+      // Fallback: Infer batting order from wickets
+      // If winner has wickets remaining, they likely batted second
+      if (winnerWickets < 10) {
+        // Winner has wickets remaining - likely batted second and won by wickets
+        const wicketsRemaining = 10 - winnerWickets;
+        marginType = 'wickets';
+        resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
+      } else {
+        // Winner lost all wickets - likely batted first and won by runs
+        marginType = 'runs';
+        resultText = `${winnerName} won by ${margin} runs`;
+      }
+    }
+
+    return {
+      winner,
+      winnerName,
+      margin,
+      marginType,
+      resultText,
+    };
+  } catch (error) {
+    console.error('[Transformer] Error calculating match result:', error);
+    return undefined;
+  }
+}
+
 export function transformApiMatchToFrontend(apiMatch: any): any {
   const teams = apiMatch.teams || apiMatch.teamInfo || [];
   const homeTeam = teams[0] || {};
@@ -101,32 +237,157 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
   let homeScore: any = {};
   let awayScore: any = {};
   
+  // Store team IDs for later use
+  const localteamId = isV2Format ? apiMatch.localteam_id : undefined;
+  const visitorteamId = isV2Format ? apiMatch.visitorteam_id : undefined;
+  
   if (isV2Format) {
     // v2.0: Find latest scores by team_id matching localteam_id/visitorteam_id
     // Scoreboards can have multiple entries per team (innings), get the latest one
-    const localteamId = apiMatch.localteam_id;
-    const visitorteamId = apiMatch.visitorteam_id;
     
     // Get all scores for each team and take the latest (highest overs or total)
-    const homeScores = scores.filter((s: any) => s.team_id === localteamId);
-    const awayScores = scores.filter((s: any) => s.team_id === visitorteamId);
+    const homeScores = scores.filter((s: any) => s.team_id === localteamId && s.team_id !== undefined);
+    const awayScores = scores.filter((s: any) => s.team_id === visitorteamId && s.team_id !== undefined);
     
-    // Get the latest score (highest overs or most recent)
-    homeScore = homeScores.length > 0 
-      ? homeScores.reduce((latest: any, current: any) => {
-          return (current.overs || 0) > (latest.overs || 0) ? current : latest;
-        }, homeScores[0])
-      : scores.find((s: any) => s.scoreboard === 'S1') || scores[0] || {};
+    // Get the latest score (highest overs or most recent) for each team
+    if (homeScores.length > 0) {
+      homeScore = homeScores.reduce((latest: any, current: any) => {
+        const latestOvers = parseFloat(latest.overs?.toString() || '0');
+        const currentOvers = parseFloat(current.overs?.toString() || '0');
+        return currentOvers > latestOvers ? current : latest;
+      }, homeScores[0]);
+    } else {
+      // Fallback: Try to find by scoreboard S1, but verify team_id matches
+      const s1Score = scores.find((s: any) => s.scoreboard === 'S1');
+      if (s1Score && s1Score.team_id === localteamId) {
+        homeScore = s1Score;
+      } else if (s1Score && s1Score.team_id !== visitorteamId) {
+        // If S1 exists and doesn't belong to away team, use it for home
+        homeScore = s1Score;
+      } else {
+        // Find first score that doesn't belong to away team
+        const nonAwayScore = scores.find((s: any) => s.team_id !== visitorteamId && s.team_id !== undefined);
+        homeScore = nonAwayScore || scores[0] || {};
+      }
+    }
     
-    awayScore = awayScores.length > 0
-      ? awayScores.reduce((latest: any, current: any) => {
-          return (current.overs || 0) > (latest.overs || 0) ? current : latest;
-        }, awayScores[0])
-      : scores.find((s: any) => s.scoreboard === 'S2') || scores[1] || {};
+    if (awayScores.length > 0) {
+      awayScore = awayScores.reduce((latest: any, current: any) => {
+        const latestOvers = parseFloat(latest.overs?.toString() || '0');
+        const currentOvers = parseFloat(current.overs?.toString() || '0');
+        return currentOvers > latestOvers ? current : latest;
+      }, awayScores[0]);
+    } else {
+      // Fallback: Try to find by scoreboard S2, but verify team_id matches
+      const s2Score = scores.find((s: any) => s.scoreboard === 'S2');
+      if (s2Score && s2Score.team_id === visitorteamId) {
+        awayScore = s2Score;
+      } else if (s2Score && s2Score.team_id !== localteamId) {
+        // If S2 exists and doesn't belong to home team, use it for away
+        awayScore = s2Score;
+      } else {
+        // Find first score that doesn't belong to home team
+        const nonHomeScore = scores.find((s: any) => s.team_id !== localteamId && s.team_id !== undefined);
+        awayScore = nonHomeScore || (scores.length > 1 ? scores[1] : {});
+      }
+    }
+    
+    // CRITICAL: Ensure homeScore and awayScore are from different teams
+    // If they're the same, we need to fix it before proceeding
+    if (homeScore.team_id === awayScore.team_id && homeScore.team_id !== undefined && scores.length > 1) {
+      // Find scores for the missing team
+      if (homeScore.team_id === localteamId) {
+        // homeScore is correct, find awayScore
+        const correctAwayScore = scores.find((s: any) => s.team_id === visitorteamId && s.team_id !== localteamId);
+        if (correctAwayScore) {
+          awayScore = correctAwayScore;
+        } else {
+          // If no away score exists yet (only first innings), set awayScore to empty/default
+          awayScore = {
+            team_id: visitorteamId,
+            total: 0,
+            wickets: 0,
+            overs: 0,
+            scoreboard: 'S2'
+          };
+        }
+      } else if (homeScore.team_id === visitorteamId) {
+        // homeScore is actually away team's score, swap
+        const correctHomeScore = scores.find((s: any) => s.team_id === localteamId && s.team_id !== visitorteamId);
+        if (correctHomeScore) {
+          const temp = homeScore;
+          homeScore = correctHomeScore;
+          awayScore = temp;
+        } else {
+          // If no home score exists yet, set homeScore to empty/default
+          const temp = homeScore;
+          homeScore = {
+            team_id: localteamId,
+            total: 0,
+            wickets: 0,
+            overs: 0,
+            scoreboard: 'S1'
+          };
+          awayScore = temp;
+        }
+      }
+    }
+    
+    // Final validation: Log if there are still issues (should be rare after above fixes)
+    if (homeScore.team_id === awayScore.team_id && homeScore.team_id !== undefined && scores.length > 1) {
+      console.warn('[Transformer] WARNING: homeScore and awayScore still have same team_id after fixes!', {
+        homeScoreTeamId: homeScore.team_id,
+        awayScoreTeamId: awayScore.team_id,
+        localteamId,
+        visitorteamId,
+        scoresCount: scores.length,
+        scoreboards: scores.map((s: any) => ({ scoreboard: s.scoreboard, team_id: s.team_id, total: s.total, overs: s.overs }))
+      });
+    }
+    
+    // Final validation: Log the final assignment for debugging
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Transformer] Final score assignment:', {
+        homeScore: {
+          team_id: homeScore.team_id,
+          scoreboard: homeScore.scoreboard,
+          total: homeScore.total,
+          runs: homeScore.score,
+          overs: homeScore.overs,
+          wickets: homeScore.wickets
+        },
+        awayScore: {
+          team_id: awayScore.team_id,
+          scoreboard: awayScore.scoreboard,
+          total: awayScore.total,
+          runs: awayScore.score,
+          overs: awayScore.overs,
+          wickets: awayScore.wickets
+        },
+        localteamId,
+        visitorteamId
+      });
+    }
   } else {
     // v3: Find scores by participant_id or scoreboard
     homeScore = scores.find((s: any) => s.scoreboard === '1' || s.participant_id === homeParticipant.id) || scores[0] || {};
     awayScore = scores.find((s: any) => s.scoreboard === '2' || s.participant_id === awayParticipant.id) || scores[1] || {};
+    
+    // Additional validation for v3
+    if (homeScore.participant_id === awayScore.participant_id && homeScore.participant_id !== undefined) {
+      console.warn('[Transformer] Warning: homeScore and awayScore have same participant_id, attempting to fix...');
+      if (homeScore.participant_id === homeParticipant.id) {
+        const correctAwayScore = scores.find((s: any) => s.participant_id === awayParticipant.id && s.participant_id !== homeParticipant.id);
+        if (correctAwayScore) awayScore = correctAwayScore;
+      } else {
+        const correctHomeScore = scores.find((s: any) => s.participant_id === homeParticipant.id && s.participant_id !== awayParticipant.id);
+        if (correctHomeScore) {
+          const temp = homeScore;
+          homeScore = correctHomeScore;
+          awayScore = temp;
+        }
+      }
+    }
   }
 
   let status: 'live' | 'completed' | 'upcoming' | 'cancelled' = 'upcoming';
@@ -160,6 +421,65 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       status = 'live';
     } else if (stateId === 1) {
       status = 'upcoming';
+    }
+  }
+
+  // Additional check: If match appears live but both innings are complete, mark as completed
+  // This handles cases where state_id might be 3/4 but the match has actually finished
+  // IMPORTANT: Only mark as completed if BOTH teams have finished their innings
+  if (status === 'live' && scores.length >= 2 && homeScore.team_id && awayScore.team_id) {
+    // Determine max overs based on format
+    const matchType = (apiMatch.type || '').toLowerCase();
+    const isT20 = matchType.includes('t20');
+    const isODI = matchType.includes('odi');
+    const maxOvers = isT20 ? 20 : isODI ? 50 : undefined;
+    
+    // Check if HOME team has completed their innings
+    const homeOvers = parseFloat(homeScore.overs?.toString() || '0');
+    const homeWickets = homeScore.wickets || 0;
+    const homeAllOut = homeWickets >= 10;
+    const homeReachedMaxOvers = maxOvers !== undefined && homeOvers >= maxOvers;
+    const homeInningsComplete = homeAllOut || homeReachedMaxOvers;
+    
+    // Check if AWAY team has completed their innings
+    const awayOvers = parseFloat(awayScore.overs?.toString() || '0');
+    const awayWickets = awayScore.wickets || 0;
+    const awayAllOut = awayWickets >= 10;
+    const awayReachedMaxOvers = maxOvers !== undefined && awayOvers >= maxOvers;
+    const awayInningsComplete = awayAllOut || awayReachedMaxOvers;
+    
+    // Only mark as completed if BOTH teams have completed their innings
+    const bothInningsComplete = homeInningsComplete && awayInningsComplete;
+    
+    // Also check if there are no active batters (all out or innings ended)
+    const hasActiveBatters = apiMatch.batting && Array.isArray(apiMatch.batting) 
+      ? apiMatch.batting.some((b: any) => b.active === true && !b.batsmanout_id)
+      : false;
+    
+    // If both innings are complete and no active batters, mark as completed
+    if (bothInningsComplete && !hasActiveBatters) {
+      console.log('[Transformer] Match marked as completed: both innings complete, no active batters', {
+        homeInningsComplete,
+        awayInningsComplete,
+        homeOvers,
+        homeWickets,
+        awayOvers,
+        awayWickets
+      });
+      status = 'completed';
+    } else {
+      // Log why match is still live
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[Transformer] Match still live:', {
+          homeInningsComplete,
+          awayInningsComplete,
+          hasActiveBatters,
+          homeOvers,
+          homeWickets,
+          awayOvers,
+          awayWickets
+        });
+      }
     }
   }
 
@@ -256,7 +576,9 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
   let currentScore: any = undefined;
   // For v2.0, also check if live field is true even if status is not set yet
   const isLiveMatch = status === 'live' || (isV2Format && apiMatch.live === true);
-  if (isLiveMatch && scores.length > 0) {
+  // For completed matches, we also need currentScore to calculate result
+  const needsScore = isLiveMatch || status === 'completed';
+  if (needsScore && scores.length > 0) {
     if (sport === 'football') {
       currentScore = {
         home: { runs: homeScore.score || 0, wickets: 0, overs: 0, balls: 0 },
@@ -264,8 +586,50 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       };
     } else {
       // v2.0 uses 'total' for runs, v3 uses 'score'
-      const homeRuns = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
-      const awayRuns = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
+      let homeRuns = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
+      let awayRuns = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
+      
+      // Ensure we're using the correct scores for home and away
+      // Double-check that homeScore and awayScore are actually different
+      if (isV2Format && homeScore.team_id === awayScore.team_id && homeScore.team_id !== undefined && scores.length > 1) {
+        const localteamId = apiMatch.localteam_id;
+        const visitorteamId = apiMatch.visitorteam_id;
+        console.error('[Transformer] ERROR: homeScore and awayScore have same team_id when constructing currentScore!', {
+          team_id: homeScore.team_id,
+          localteamId,
+          visitorteamId,
+          homeScore: { team_id: homeScore.team_id, total: homeScore.total, overs: homeScore.overs },
+          awayScore: { team_id: awayScore.team_id, total: awayScore.total, overs: awayScore.overs },
+          allScores: scores.map((s: any) => ({ scoreboard: s.scoreboard, team_id: s.team_id, total: s.total, overs: s.overs }))
+        });
+        
+        // If they're the same and we have multiple scores, try to fix it
+        // Find the correct away score
+        if (homeScore.team_id === localteamId) {
+          const correctAwayScore = scores.find((s: any) => s.team_id === visitorteamId && s.team_id !== localteamId);
+          if (correctAwayScore) {
+            awayScore = correctAwayScore;
+            awayRuns = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
+            console.log('[Transformer] Fixed awayScore in currentScore construction');
+          } else {
+            // Only one innings complete - set away to 0
+            awayRuns = 0;
+            awayScore = { team_id: visitorteamId, total: 0, wickets: 0, overs: 0 };
+          }
+        } else {
+          // homeScore is wrong, find correct home score
+          const correctHomeScore = scores.find((s: any) => s.team_id === localteamId && s.team_id !== visitorteamId);
+          if (correctHomeScore) {
+            homeScore = correctHomeScore;
+            homeRuns = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
+            console.log('[Transformer] Fixed homeScore in currentScore construction');
+          } else {
+            // Only one innings complete - set home to 0
+            homeRuns = 0;
+            homeScore = { team_id: localteamId, total: 0, wickets: 0, overs: 0 };
+          }
+        }
+      }
       
       currentScore = {
         home: {
@@ -281,15 +645,79 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
           balls: 0,
         },
       };
+      
+      // Final validation: Log if scores are identical (which might be legitimate in some cases)
+      if (currentScore.home.runs === currentScore.away.runs && 
+          currentScore.home.wickets === currentScore.away.wickets &&
+          currentScore.home.overs === currentScore.away.overs &&
+          currentScore.home.runs > 0) {
+        console.warn('[Transformer] WARNING: Both teams have identical scores!', {
+          home: currentScore.home,
+          away: currentScore.away,
+          homeScoreTeamId: homeScore.team_id,
+          awayScoreTeamId: awayScore.team_id
+        });
+      }
+      
+      // Final check: If both teams have completed their innings, mark as completed
+      // This handles cases where state_id is 3/4 but match is actually finished
+      // IMPORTANT: Only mark as completed if BOTH teams have finished AND scores are different
+      if (status === 'live' && currentScore && homeScore.team_id !== awayScore.team_id) {
+        const matchType = (apiMatch.type || '').toLowerCase();
+        const isT20 = matchType.includes('t20');
+        const isODI = matchType.includes('odi');
+        const maxOvers = isT20 ? 20 : isODI ? 50 : undefined;
+        
+        const homeAllOut = currentScore.home.wickets >= 10;
+        const awayAllOut = currentScore.away.wickets >= 10;
+        const homeReachedMax = maxOvers !== undefined && currentScore.home.overs >= maxOvers;
+        const awayReachedMax = maxOvers !== undefined && currentScore.away.overs >= maxOvers;
+        
+        // Only mark as completed if BOTH teams have completed their innings
+        const bothInningsComplete = (homeAllOut && awayAllOut) || (homeReachedMax && awayReachedMax) || 
+            (homeAllOut && awayReachedMax) || (homeReachedMax && awayAllOut);
+        
+        if (bothInningsComplete) {
+          console.log('[Transformer] Match marked as completed: both innings finished based on scorecard', {
+            homeAllOut,
+            awayAllOut,
+            homeReachedMax,
+            awayReachedMax,
+            homeOvers: currentScore.home.overs,
+            homeWickets: currentScore.home.wickets,
+            awayOvers: currentScore.away.overs,
+            awayWickets: currentScore.away.wickets
+          });
+          status = 'completed';
+          // Also set matchEnded flag
+          apiMatch.matchEnded = true;
+        }
+      }
     }
   }
 
   let score: any = undefined;
   if (status === 'completed' && scores.length > 0) {
+    // Use total for v2.0, score for v3
+    const homeFinal = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
+    const awayFinal = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
     score = {
-      home: homeScore.score || 0,
-      away: awayScore.score || 0,
+      home: homeFinal,
+      away: awayFinal,
     };
+  }
+
+  // Calculate match result for completed matches
+  let matchResult: any = undefined;
+  if (status === 'completed' && currentScore && scores.length >= 2) {
+    matchResult = calculateMatchResult(
+      currentScore,
+      scores,
+      teams,
+      apiMatch.localteam_id,
+      apiMatch.visitorteam_id,
+      isV2Format
+    );
   }
 
   return {
@@ -338,6 +766,8 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       ? parseInt(apiMatch.note.match(/Target (\d+)/)?.[1] || '0')
       : undefined,
     endingAt: apiMatch.ending_at ? new Date(apiMatch.ending_at) : undefined,
+    // Match result (calculated for completed matches)
+    result: matchResult,
     // Current batters and bowlers for live view
     currentBatters: (() => {
       if (!isV2Format) {
@@ -404,14 +834,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       }
       
       return currentBatsmen.map((b: any) => {
-        let playerName = `Player ${b.player_id || 'Unknown'}`;
-        if (b.player) {
-          if (typeof b.player === 'object') {
-            playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-          } else if (typeof b.player === 'string') {
-            playerName = b.player;
-          }
-        }
+        const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
         return {
           playerId: b.player_id?.toString(),
           playerName,
@@ -491,14 +914,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       }
       
       return currentBowlers.map((b: any) => {
-        let playerName = `Player ${b.player_id || 'Unknown'}`;
-        if (b.player) {
-          if (typeof b.player === 'object') {
-            playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-          } else if (typeof b.player === 'string') {
-            playerName = b.player;
-          }
-        }
+        const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
         return {
           playerId: b.player_id?.toString(),
           playerName,
@@ -534,14 +950,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
             .filter((b: any) => b.batsmanout_id && b.fow_score !== undefined)
             .sort((a: any, b: any) => (b.fow_score || 0) - (a.fow_score || 0))[0];
           if (lastOut) {
-            let playerName = `Player ${lastOut.player_id || 'Unknown'}`;
-            if (lastOut.player) {
-              if (typeof lastOut.player === 'object') {
-                playerName = lastOut.player.fullname || lastOut.player.name || lastOut.player.firstname || playerName;
-              } else if (typeof lastOut.player === 'string') {
-                playerName = lastOut.player;
-              }
-            }
+            const playerName = extractPlayerName(lastOut.player || lastOut.playerinfo || lastOut.player_data, lastOut.player_id);
             return {
               playerId: lastOut.player_id?.toString(),
               playerName,
@@ -598,14 +1007,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         .filter((b: any) => b.score !== undefined && b.score !== null && (b.score > 0 || b.ball > 0))
         .map((b: any) => {
           // Player name - try to get from included player data, otherwise use player_id
-          let playerName = `Player ${b.player_id || 'Unknown'}`;
-          if (b.player) {
-            if (typeof b.player === 'object') {
-              playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-            } else if (typeof b.player === 'string') {
-              playerName = b.player;
-            }
-          }
+          const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
           
           return {
             playerId: b.player_id?.toString(),
@@ -666,14 +1068,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         .filter((b: any) => (b.overs || b.wickets) && (b.overs > 0 || b.wickets > 0))
         .map((b: any) => {
           // Player name - try to get from included player data, otherwise use player_id
-          let playerName = `Player ${b.player_id || 'Unknown'}`;
-          if (b.player) {
-            if (typeof b.player === 'object') {
-              playerName = b.player.fullname || b.player.name || b.player.firstname || playerName;
-            } else if (typeof b.player === 'string') {
-              playerName = b.player;
-            }
-          }
+          const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
           
           return {
             playerId: b.player_id?.toString(),
