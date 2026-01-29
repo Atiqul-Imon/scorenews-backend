@@ -295,12 +295,33 @@ export class CricketService {
         const homeReachedMax = maxOvers !== undefined && matchData.currentScore.home?.overs >= maxOvers;
         const awayReachedMax = maxOvers !== undefined && matchData.currentScore.away?.overs >= maxOvers;
         
-        // If both innings are complete, mark as completed
+        // Check if both teams have scores (both innings have started)
+        const bothTeamsBatted = matchData.currentScore.home?.runs !== undefined && 
+                               matchData.currentScore.away?.runs !== undefined;
+        
+        // Check time since match started (for matches that may have ended but API still shows as live)
+        let hoursSinceStart = 0;
+        if (matchData.startTime) {
+          const startTime = new Date(matchData.startTime);
+          const now = new Date();
+          hoursSinceStart = (now.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+        }
+        
+        // If both innings are complete (both all out OR both reached max overs), mark as completed
         if ((homeAllOut && awayAllOut) || (homeReachedMax && awayReachedMax) || 
             (homeAllOut && awayReachedMax) || (homeReachedMax && awayAllOut)) {
           finalStatus = 'completed';
           matchEnded = true;
           this.logger.log(`Match ${matchData.matchId} marked as completed: both innings finished`, 'CricketService');
+        }
+        // If one team completed their innings (all out OR max overs) AND enough time has passed, mark as completed
+        // This catches cases where the match ended but API still shows as live
+        else if (bothTeamsBatted && hoursSinceStart > (isT20 ? 3 : isODI ? 8 : 12)) {
+          if (homeAllOut || awayAllOut || homeReachedMax || awayReachedMax) {
+            finalStatus = 'completed';
+            matchEnded = true;
+            this.logger.log(`Match ${matchData.matchId} marked as completed: one innings finished and ${hoursSinceStart.toFixed(1)} hours passed`, 'CricketService');
+          }
         }
       }
 
@@ -312,6 +333,28 @@ export class CricketService {
         if (calculatedResult) {
           dataToSave = { ...matchData, result: calculatedResult };
           this.logger.log(`Calculated result for completed match ${matchData.matchId}`, 'CricketService');
+        }
+      }
+      
+      // Verify data completeness for completed matches
+      if (finalStatus === 'completed') {
+        const hasBothScores = dataToSave.currentScore?.home?.runs !== undefined && 
+                             dataToSave.currentScore?.away?.runs !== undefined;
+        const hasValidResult = dataToSave.result && dataToSave.result.winner && dataToSave.result.margin > 0;
+        
+        if (!hasBothScores) {
+          this.logger.warn(`⚠️  Completed match ${matchData.matchId} missing complete score data. Home: ${dataToSave.currentScore?.home?.runs}, Away: ${dataToSave.currentScore?.away?.runs}`, 'CricketService');
+        }
+        
+        if (!hasValidResult && hasBothScores) {
+          // Try to calculate result again
+          const calculatedResult = this.calculateMatchResultFromData(dataToSave);
+          if (calculatedResult) {
+            dataToSave.result = calculatedResult;
+            this.logger.log(`Recalculated result for completed match ${matchData.matchId}`, 'CricketService');
+          } else {
+            this.logger.warn(`⚠️  Could not calculate result for completed match ${matchData.matchId}`, 'CricketService');
+          }
         }
       }
 
@@ -623,16 +666,64 @@ export class CricketService {
               });
               
               // Save newly completed matches to database
+              // IMPORTANT: Re-fetch from fixtures endpoint to get final complete data
               const completedToSave = matchesToSave.filter((match) => 
                 newlyCompletedMatches.some((m: any) => m.matchId === match.matchId)
               );
               
               if (completedToSave.length > 0) {
-                this.logger.log(`Saving ${completedToSave.length} newly completed match(es) to database`, 'CricketService');
+                this.logger.log(`Re-fetching ${completedToSave.length} newly completed match(es) from fixtures endpoint to get final data...`, 'CricketService');
+                
+                // Re-fetch each completed match from fixtures endpoint to ensure we have final data
                 Promise.all(
-                  completedToSave.map((match) => this.saveMatchToDatabase(match))
+                  completedToSave.map(async (match) => {
+                    try {
+                      // Re-fetch from fixtures endpoint to get complete final data
+                      const freshMatchData = await this.sportsMonksService.getMatchDetails(match.matchId, 'cricket');
+                      if (freshMatchData) {
+                        // Transform the fresh data
+                        const transformedFreshMatch = transformSportsMonksMatchToFrontend(freshMatchData, 'cricket');
+                        
+                        // Ensure status is completed
+                        transformedFreshMatch.status = 'completed';
+                        transformedFreshMatch.matchEnded = true;
+                        
+                        // Verify we have complete score data
+                        const hasCompleteScores = transformedFreshMatch.currentScore?.home?.runs !== undefined && 
+                                                 transformedFreshMatch.currentScore?.away?.runs !== undefined;
+                        
+                        if (!hasCompleteScores) {
+                          this.logger.warn(`⚠️  Fresh data for match ${match.matchId} still missing complete scores. Home: ${transformedFreshMatch.currentScore?.home?.runs}, Away: ${transformedFreshMatch.currentScore?.away?.runs}`, 'CricketService');
+                        }
+                        
+                        // Calculate result if not present
+                        if (!transformedFreshMatch.result && transformedFreshMatch.currentScore) {
+                          const calculatedResult = this.calculateMatchResultFromData(transformedFreshMatch);
+                          if (calculatedResult) {
+                            transformedFreshMatch.result = calculatedResult;
+                            this.logger.log(`Calculated result for match ${match.matchId}: ${calculatedResult.resultText}`, 'CricketService');
+                          }
+                        }
+                        
+                        // Enrich player names
+                        const enrichedMatch = await this.enrichPlayerNames(transformedFreshMatch);
+                        
+                        // Save the fresh complete data
+                        await this.saveMatchToDatabase(enrichedMatch);
+                        this.logger.log(`✅ Saved completed match ${match.matchId} with fresh final data from fixtures endpoint`, 'CricketService');
+                      } else {
+                        // Fallback: Save the data we have (but log warning)
+                        this.logger.warn(`Could not re-fetch match ${match.matchId} from fixtures, saving available data`, 'CricketService');
+                        await this.saveMatchToDatabase(match);
+                      }
+                    } catch (error: any) {
+                      // If re-fetch fails, save what we have but log the error
+                      this.logger.error(`Error re-fetching completed match ${match.matchId} from fixtures: ${error.message}. Saving available data.`, error.stack, 'CricketService');
+                      await this.saveMatchToDatabase(match);
+                    }
+                  })
                 ).then(() => {
-                  this.logger.log(`✅ Successfully saved ${completedToSave.length} completed match(es) to MongoDB`, 'CricketService');
+                  this.logger.log(`✅ Successfully saved ${completedToSave.length} completed match(es) to MongoDB with final data`, 'CricketService');
                 }).catch((error) => {
                   this.logger.error('Error saving completed matches', error, 'CricketService');
                 });
