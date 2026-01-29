@@ -71,7 +71,8 @@ import { WebsocketModule } from './websocket/websocket.module';
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
         const nodeEnv = configService.get<string>('NODE_ENV', 'development');
-        const defaultMax = nodeEnv === 'development' ? 1000 : 100;
+        // Increased production limit to handle frontend polling (300 req per 15 min = 20 req/min)
+        const defaultMax = nodeEnv === 'development' ? 1000 : 300;
         return {
           throttlers: [{
             ttl: configService.get<number>('RATE_LIMIT_WINDOW_MS', 900000),

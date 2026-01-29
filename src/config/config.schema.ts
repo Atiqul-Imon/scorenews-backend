@@ -27,7 +27,7 @@ export const configValidationSchema = Joi.object({
 
   // Rate Limiting
   RATE_LIMIT_WINDOW_MS: Joi.number().default(900000),
-  RATE_LIMIT_MAX_REQUESTS: Joi.number().default(100),
+  RATE_LIMIT_MAX_REQUESTS: Joi.number().default(300), // Increased default for production
 
   // CORS
   CORS_ORIGIN: Joi.string().default('http://localhost:3000'),
