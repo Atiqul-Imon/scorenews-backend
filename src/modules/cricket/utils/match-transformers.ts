@@ -36,8 +36,110 @@ function extractPlayerName(playerData: any, playerId?: any): string {
 }
 
 /**
+ * Parse match result from SportsMonks API's note field
+ * Extracts winner, margin, and margin type from the official result text
+ * 
+ * @param note - The result note from API (e.g., "South Africa won by 7 wickets (with 15 balls remaining)")
+ * @param winnerTeamId - The winner team ID from API
+ * @param localteamId - Local team ID
+ * @param visitorteamId - Visitor team ID
+ * @param teams - Teams object with home/away names
+ * @returns Parsed result object or undefined if parsing fails
+ */
+export function parseApiResultNote(
+  note: string,
+  winnerTeamId: number | string,
+  localteamId: number | string,
+  visitorteamId: number | string,
+  teams: any
+): any | undefined {
+  try {
+    if (!note || !winnerTeamId) {
+      return undefined;
+    }
+
+    // Determine winner from winner_team_id
+    const winnerIsHome = winnerTeamId.toString() === localteamId.toString();
+    const winner = winnerIsHome ? 'home' : 'away';
+    const winnerName = winnerIsHome ? teams.home.name : teams.away.name;
+
+    // Parse the note to extract margin and margin type
+    // Examples:
+    // "South Africa won by 7 wickets (with 15 balls remaining)"
+    // "West Indies won by 47 runs"
+    // "Match tied"
+    // "No result"
+    // "Match abandoned"
+
+    const noteLower = note.toLowerCase().trim();
+
+    // Check for draw/tie/no result
+    if (noteLower.includes('tied') || noteLower.includes('tie')) {
+      return {
+        winner: 'draw',
+        winnerName: 'Match Tied',
+        margin: 0,
+        marginType: 'runs' as const,
+        resultText: 'Match Tied',
+        dataSource: 'api',
+      };
+    }
+
+    if (noteLower.includes('no result') || noteLower.includes('abandoned') || noteLower.includes('cancelled')) {
+      return {
+        winner: 'draw',
+        winnerName: 'No Result',
+        margin: 0,
+        marginType: 'runs' as const,
+        resultText: note.trim(),
+        dataSource: 'api',
+      };
+    }
+
+    // Extract margin and type from patterns like:
+    // "won by X runs"
+    // "won by X wickets"
+    // "won by X wicket" (singular)
+    const runsMatch = note.match(/won by (\d+)\s+runs?/i);
+    const wicketsMatch = note.match(/won by (\d+)\s+wickets?/i);
+
+    let margin = 0;
+    let marginType: 'runs' | 'wickets' = 'runs';
+    let resultText = note.trim();
+
+    if (runsMatch) {
+      margin = parseInt(runsMatch[1], 10);
+      marginType = 'runs';
+      resultText = `${winnerName} won by ${margin} runs`;
+    } else if (wicketsMatch) {
+      margin = parseInt(wicketsMatch[1], 10);
+      marginType = 'wickets';
+      resultText = `${winnerName} won by ${margin} wicket${margin !== 1 ? 's' : ''}`;
+    } else {
+      // If we can't parse margin, use the note as-is but still set winner
+      resultText = note.trim();
+      margin = 0;
+      marginType = 'runs';
+    }
+
+    return {
+      winner,
+      winnerName,
+      margin,
+      marginType,
+      resultText,
+      dataSource: 'api',
+    };
+  } catch (error) {
+    console.error('[Transformer] Error parsing API result note:', error);
+    return undefined;
+  }
+}
+
+/**
  * Calculate match result for completed matches
  * Determines winner, margin, and margin type (runs or wickets) based on batting order
+ * This is used as a fallback when API doesn't provide result in note field
  */
 export function calculateMatchResult(
   currentScore: any,
@@ -45,7 +147,8 @@ export function calculateMatchResult(
   teams: any,
   localteamId: any,
   visitorteamId: any,
-  isV2Format: boolean
+  isV2Format: boolean,
+  winnerTeamId?: any // Optional: winner_team_id from API
 ): any {
   try {
     const homeRuns = currentScore.home?.runs || 0;
@@ -74,17 +177,26 @@ export function calculateMatchResult(
       }
     }
 
-    // Determine winner
-    const homeWon = homeRuns > awayRuns;
+    // Determine winner - use API's winner_team_id if available, otherwise calculate from scores
+    let homeWon: boolean;
+    if (winnerTeamId !== undefined && winnerTeamId !== null) {
+      // Use API's winner_team_id as primary source of truth
+      homeWon = winnerTeamId === localteamId;
+    } else {
+      // Fallback: calculate from scores
+      homeWon = homeRuns > awayRuns;
+    }
+    
     const winner = homeWon ? 'home' : 'away';
     const winnerName = homeWon ? teams.home.name : teams.away.name;
     const winnerScore = homeWon ? currentScore.home : currentScore.away;
     const winnerWickets = winnerScore?.wickets ?? 10;
 
     // Calculate margin
-    const margin = Math.abs(homeRuns - awayRuns);
+    const runMargin = Math.abs(homeRuns - awayRuns);
     let marginType: 'runs' | 'wickets' = 'runs';
     let resultText = '';
+    let finalMargin = runMargin; // Default to run margin
 
     // Determine margin type based on batting order
     if (firstInningsTeam && secondInningsTeam) {
@@ -92,18 +204,21 @@ export function calculateMatchResult(
       if (winner === firstInningsTeam) {
         // Team batting first won - always by runs
         marginType = 'runs';
-        resultText = `${winnerName} won by ${margin} runs`;
+        finalMargin = runMargin;
+        resultText = `${winnerName} won by ${runMargin} runs`;
       } else {
         // Team batting second won
         if (winnerWickets < 10) {
           // Winner has wickets remaining - won by wickets
           const wicketsRemaining = 10 - winnerWickets;
           marginType = 'wickets';
+          finalMargin = wicketsRemaining; // Use wickets remaining, not run margin
           resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
         } else {
           // Winner lost all wickets but still won (rare) - won by runs
           marginType = 'runs';
-          resultText = `${winnerName} won by ${margin} runs`;
+          finalMargin = runMargin;
+          resultText = `${winnerName} won by ${runMargin} runs`;
         }
       }
     } else {
@@ -113,18 +228,20 @@ export function calculateMatchResult(
         // Winner has wickets remaining - likely batted second and won by wickets
         const wicketsRemaining = 10 - winnerWickets;
         marginType = 'wickets';
+        finalMargin = wicketsRemaining; // Use wickets remaining, not run margin
         resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
       } else {
         // Winner lost all wickets - likely batted first and won by runs
         marginType = 'runs';
-        resultText = `${winnerName} won by ${margin} runs`;
+        finalMargin = runMargin;
+        resultText = `${winnerName} won by ${runMargin} runs`;
       }
     }
 
     return {
       winner,
       winnerName,
-      margin,
+      margin: finalMargin, // Use correct margin (runs or wickets)
       marginType,
       resultText,
     };
@@ -862,17 +979,46 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     };
   }
 
-  // Calculate match result for completed matches
+  // Extract match result for completed matches
+  // Priority: Use API's note field (official result) > Calculate from scores
   let matchResult: any = undefined;
-  if (status === 'completed' && currentScore && scores.length >= 2) {
-    matchResult = calculateMatchResult(
-      currentScore,
-      scores,
-      teams,
-      apiMatch.localteam_id,
-      apiMatch.visitorteam_id,
-      isV2Format
-    );
+  if (status === 'completed') {
+    // First, try to parse from API's note field (most reliable)
+    if (apiMatch.note && apiMatch.winner_team_id && currentScore) {
+      const parsedResult = parseApiResultNote(
+        apiMatch.note,
+        apiMatch.winner_team_id,
+        apiMatch.localteam_id,
+        apiMatch.visitorteam_id,
+        teams
+      );
+      
+      if (parsedResult) {
+        matchResult = parsedResult;
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Transformer] Using API note for result:', parsedResult.resultText);
+        }
+      }
+    }
+    
+    // Fallback: Calculate from scores if API note is not available or parsing failed
+    if (!matchResult && currentScore && scores.length >= 2) {
+      matchResult = calculateMatchResult(
+        currentScore,
+        scores,
+        teams,
+        apiMatch.localteam_id,
+        apiMatch.visitorteam_id,
+        isV2Format,
+        apiMatch.winner_team_id // Use API's winner_team_id if available
+      );
+      if (matchResult) {
+        matchResult.dataSource = 'calculated';
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Transformer] Calculated result (API note not available):', matchResult.resultText);
+        }
+      }
+    }
   }
 
   return {
@@ -921,8 +1067,21 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       ? parseInt(apiMatch.note.match(/Target (\d+)/)?.[1] || '0')
       : undefined,
     endingAt: apiMatch.ending_at ? new Date(apiMatch.ending_at) : undefined,
-    // Match result (calculated for completed matches)
+    // Match result (from API note or calculated)
     result: matchResult,
+    // Additional API fields for completed matches
+    apiNote: apiMatch.note || undefined, // Raw API note field
+    tossWonTeamId: apiMatch.toss_won_team_id?.toString() || undefined,
+    manOfMatchId: apiMatch.man_of_match_id?.toString() || undefined,
+    manOfSeriesId: apiMatch.man_of_series_id?.toString() || undefined,
+    totalOversPlayed: apiMatch.total_overs_played || undefined,
+    superOver: apiMatch.super_over || false,
+    followOn: apiMatch.follow_on || false,
+    drawNoResult: apiMatch.draw_noresult || false,
+    // Data source tracking
+    dataSource: matchResult?.dataSource || (status === 'completed' ? 'calculated' : undefined),
+    apiFetchedAt: status === 'completed' ? new Date() : undefined,
+    isCompleteData: status === 'completed' ? true : false,
     // Current batters and bowlers for live view
     currentBatters: (() => {
       if (!isV2Format) {

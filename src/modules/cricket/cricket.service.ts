@@ -194,9 +194,10 @@ export class CricketService {
       const winnerWickets = winnerScore?.wickets ?? 10;
 
       // Calculate margin
-      const margin = Math.abs(homeRuns - awayRuns);
+      const runMargin = Math.abs(homeRuns - awayRuns);
       let marginType: 'runs' | 'wickets' = 'runs';
       let resultText = '';
+      let finalMargin = runMargin; // Default to run margin
 
       // Determine batting order from innings data if available
       let firstInningsTeam: 'home' | 'away' | null = null;
@@ -222,18 +223,21 @@ export class CricketService {
         if (winner === firstInningsTeam) {
           // Team batting first won - always by runs
           marginType = 'runs';
-          resultText = `${winnerName} won by ${margin} runs`;
+          finalMargin = runMargin;
+          resultText = `${winnerName} won by ${runMargin} runs`;
         } else {
           // Team batting second won
           if (winnerWickets < 10) {
             // Winner has wickets remaining - won by wickets
             const wicketsRemaining = 10 - winnerWickets;
             marginType = 'wickets';
+            finalMargin = wicketsRemaining; // Use wickets remaining, not run margin
             resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
           } else {
             // Winner lost all wickets but still won (rare) - won by runs
             marginType = 'runs';
-            resultText = `${winnerName} won by ${margin} runs`;
+            finalMargin = runMargin;
+            resultText = `${winnerName} won by ${runMargin} runs`;
           }
         }
       } else {
@@ -243,18 +247,20 @@ export class CricketService {
           // Winner has wickets remaining - likely batted second and won by wickets
           const wicketsRemaining = 10 - winnerWickets;
           marginType = 'wickets';
+          finalMargin = wicketsRemaining; // Use wickets remaining, not run margin
           resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
         } else {
           // Winner lost all wickets - likely batted first and won by runs
           marginType = 'runs';
-          resultText = `${winnerName} won by ${margin} runs`;
+          finalMargin = runMargin;
+          resultText = `${winnerName} won by ${runMargin} runs`;
         }
       }
 
       return {
         winner,
         winnerName,
-        margin,
+        margin: finalMargin, // Use correct margin (runs or wickets)
         marginType,
         resultText,
       };
@@ -327,30 +333,41 @@ export class CricketService {
 
       // If match is transitioning to completed, ensure we have all data
       let dataToSave = matchData;
+      // Result should already be parsed from API note in transformer
+      // Only calculate if transformer didn't provide result
       if (finalStatus === 'completed' && !matchData.result && matchData.currentScore) {
-        // Calculate result if not present
         const calculatedResult = this.calculateMatchResultFromData(matchData);
         if (calculatedResult) {
-          dataToSave = { ...matchData, result: calculatedResult };
-          this.logger.log(`Calculated result for completed match ${matchData.matchId}`, 'CricketService');
+          calculatedResult.dataSource = 'calculated';
+          dataToSave = { ...matchData, result: calculatedResult, dataSource: 'calculated' };
+          this.logger.log(`Calculated result for completed match ${matchData.matchId} (API note not available)`, 'CricketService');
         }
+      } else if (finalStatus === 'completed' && matchData.result && !matchData.result.dataSource) {
+        // Ensure dataSource is set if result exists but doesn't have it
+        dataToSave = { 
+          ...matchData, 
+          result: { ...matchData.result, dataSource: matchData.dataSource || 'api' },
+          dataSource: matchData.dataSource || 'api'
+        };
       }
       
       // Verify data completeness for completed matches
       if (finalStatus === 'completed') {
         const hasBothScores = dataToSave.currentScore?.home?.runs !== undefined && 
                              dataToSave.currentScore?.away?.runs !== undefined;
-        const hasValidResult = dataToSave.result && dataToSave.result.winner && dataToSave.result.margin > 0;
+        const hasValidResult = dataToSave.result && dataToSave.result.winner && (dataToSave.result.margin > 0 || dataToSave.result.winner === 'draw');
         
         if (!hasBothScores) {
           this.logger.warn(`⚠️  Completed match ${matchData.matchId} missing complete score data. Home: ${dataToSave.currentScore?.home?.runs}, Away: ${dataToSave.currentScore?.away?.runs}`, 'CricketService');
         }
         
         if (!hasValidResult && hasBothScores) {
-          // Try to calculate result again
+          // Try to calculate result again (fallback)
           const calculatedResult = this.calculateMatchResultFromData(dataToSave);
           if (calculatedResult) {
+            calculatedResult.dataSource = 'calculated';
             dataToSave.result = calculatedResult;
+            dataToSave.dataSource = 'calculated';
             this.logger.log(`Recalculated result for completed match ${matchData.matchId}`, 'CricketService');
           } else {
             this.logger.warn(`⚠️  Could not calculate result for completed match ${matchData.matchId}`, 'CricketService');
@@ -386,7 +403,20 @@ export class CricketService {
         matchStarted: dataToSave.matchStarted || false,
         matchEnded: matchEnded,
         score: dataToSave.score,
-        result: dataToSave.result, // Store calculated match result
+        result: dataToSave.result, // Store match result (from API or calculated)
+        // Additional API fields for completed matches
+        apiNote: dataToSave.apiNote,
+        tossWonTeamId: dataToSave.tossWonTeamId,
+        manOfMatchId: dataToSave.manOfMatchId,
+        manOfSeriesId: dataToSave.manOfSeriesId,
+        totalOversPlayed: dataToSave.totalOversPlayed,
+        superOver: dataToSave.superOver || false,
+        followOn: dataToSave.followOn || false,
+        drawNoResult: dataToSave.drawNoResult || false,
+        // Data source tracking
+        dataSource: dataToSave.dataSource || (dataToSave.result?.dataSource || 'calculated'),
+        apiFetchedAt: dataToSave.apiFetchedAt || (finalStatus === 'completed' ? new Date() : undefined),
+        isCompleteData: dataToSave.isCompleteData !== undefined ? dataToSave.isCompleteData : (finalStatus === 'completed'),
       };
 
       // If match is completed, set endTime
@@ -696,13 +726,21 @@ export class CricketService {
                           this.logger.warn(`⚠️  Fresh data for match ${match.matchId} still missing complete scores. Home: ${transformedFreshMatch.currentScore?.home?.runs}, Away: ${transformedFreshMatch.currentScore?.away?.runs}`, 'CricketService');
                         }
                         
-                        // Calculate result if not present
+                        // Result should already be parsed from API note in transformer
+                        // Only calculate if transformer didn't provide result
                         if (!transformedFreshMatch.result && transformedFreshMatch.currentScore) {
                           const calculatedResult = this.calculateMatchResultFromData(transformedFreshMatch);
                           if (calculatedResult) {
+                            calculatedResult.dataSource = 'calculated';
                             transformedFreshMatch.result = calculatedResult;
-                            this.logger.log(`Calculated result for match ${match.matchId}: ${calculatedResult.resultText}`, 'CricketService');
+                            transformedFreshMatch.dataSource = 'calculated';
+                            this.logger.log(`Calculated result for match ${match.matchId} (API note not available): ${calculatedResult.resultText}`, 'CricketService');
                           }
+                        } else if (transformedFreshMatch.result) {
+                          // Ensure isCompleteData is set when saving from fixtures endpoint
+                          transformedFreshMatch.isCompleteData = true;
+                          transformedFreshMatch.apiFetchedAt = new Date();
+                          this.logger.log(`Using API result for match ${match.matchId}: ${transformedFreshMatch.result.resultText} (source: ${transformedFreshMatch.result.dataSource || 'api'})`, 'CricketService');
                         }
                         
                         // Enrich player names
@@ -976,24 +1014,29 @@ export class CricketService {
 
       const dbTotal = await this.cricketMatchModel.countDocuments(dbFilter);
 
-      // If we have matches in database, use them (even if only a few)
-      if (dbMatches.length > 0) {
-        this.logger.log(`Found ${dbMatches.length} completed matches in database (total: ${dbTotal})`, 'CricketService');
+      // If we have matches in database with complete data, use them
+      // Only fetch from API if database is empty OR matches don't have complete data
+      const matchesWithCompleteData = dbMatches.filter((m: any) => m.isCompleteData === true);
+      
+      if (matchesWithCompleteData.length > 0 || dbMatches.length > 0) {
+        this.logger.log(`Found ${dbMatches.length} completed matches in database (${matchesWithCompleteData.length} with complete data, total: ${dbTotal})`, 'CricketService');
         
-        // Calculate results for matches that don't have them
+        // Calculate results for matches that don't have them (shouldn't happen if isCompleteData is true)
         const matchesWithResults = await Promise.all(
           dbMatches.map(async (match: any) => {
             if (!match.result && match.currentScore) {
               const calculatedResult = this.calculateMatchResultFromData(match);
               if (calculatedResult) {
+                calculatedResult.dataSource = 'calculated';
                 // Update database with calculated result (async)
                 this.cricketMatchModel.updateOne(
                   { matchId: match.matchId },
-                  { $set: { result: calculatedResult } }
+                  { $set: { result: calculatedResult, dataSource: 'calculated' } }
                 ).catch((err) => {
                   this.logger.error(`Error updating match ${match.matchId} result`, err, 'CricketService');
                 });
                 match.result = calculatedResult;
+                match.dataSource = 'calculated';
               }
             }
             return match;
@@ -1045,13 +1088,20 @@ export class CricketService {
           completedMatches.map((match) => this.enrichPlayerNames(match))
         );
         
-        // Calculate and add result for matches that don't have it
+        // Results should already be parsed from API note in transformer
+        // Only calculate if transformer didn't provide result
         const matchesWithResults = enrichedMatches.map((match) => {
           if (match.status === 'completed' && !match.result && match.currentScore) {
             const calculatedResult = this.calculateMatchResultFromData(match);
             if (calculatedResult) {
+              calculatedResult.dataSource = 'calculated';
               match.result = calculatedResult;
+              match.dataSource = 'calculated';
             }
+          } else if (match.status === 'completed' && match.result) {
+            // Ensure isCompleteData is set for completed matches from API
+            match.isCompleteData = true;
+            match.apiFetchedAt = new Date();
           }
           return match;
         });
