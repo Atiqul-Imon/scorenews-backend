@@ -244,10 +244,23 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
   if (isV2Format) {
     // v2.0: Find latest scores by team_id matching localteam_id/visitorteam_id
     // Scoreboards can have multiple entries per team (innings), get the latest one
+    // IMPORTANT: Filter by type='total' to get actual scores, not 'extra' type which has total:0
     
-    // Get all scores for each team and take the latest (highest overs or total)
-    const homeScores = scores.filter((s: any) => s.team_id === localteamId && s.team_id !== undefined);
-    const awayScores = scores.filter((s: any) => s.team_id === visitorteamId && s.team_id !== undefined);
+    // Get all scores for each team, prefer 'total' type over 'extra' type
+    const homeScores = scores.filter((s: any) => 
+      s.team_id === localteamId && 
+      s.team_id !== undefined &&
+      s.type === 'total' // Only use 'total' type scoreboards, not 'extra'
+    );
+    const awayScores = scores.filter((s: any) => 
+      s.team_id === visitorteamId && 
+      s.team_id !== undefined &&
+      s.type === 'total' // Only use 'total' type scoreboards, not 'extra'
+    );
+    
+    // If no 'total' type found, fall back to any scoreboard (for backward compatibility)
+    const homeScoresFallback = scores.filter((s: any) => s.team_id === localteamId && s.team_id !== undefined);
+    const awayScoresFallback = scores.filter((s: any) => s.team_id === visitorteamId && s.team_id !== undefined);
     
     // Get the latest score (highest overs or most recent) for each team
     if (homeScores.length > 0) {
@@ -256,6 +269,13 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         const currentOvers = parseFloat(current.overs?.toString() || '0');
         return currentOvers > latestOvers ? current : latest;
       }, homeScores[0]);
+    } else if (homeScoresFallback.length > 0) {
+      // Fallback: use any scoreboard if no 'total' type found
+      homeScore = homeScoresFallback.reduce((latest: any, current: any) => {
+        const latestOvers = parseFloat(latest.overs?.toString() || '0');
+        const currentOvers = parseFloat(current.overs?.toString() || '0');
+        return currentOvers > latestOvers ? current : latest;
+      }, homeScoresFallback[0]);
     } else {
       // Fallback: Try to find by scoreboard S1, but verify team_id matches
       const s1Score = scores.find((s: any) => s.scoreboard === 'S1');
@@ -277,6 +297,13 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         const currentOvers = parseFloat(current.overs?.toString() || '0');
         return currentOvers > latestOvers ? current : latest;
       }, awayScores[0]);
+    } else if (awayScoresFallback.length > 0) {
+      // Fallback: use any scoreboard if no 'total' type found
+      awayScore = awayScoresFallback.reduce((latest: any, current: any) => {
+        const latestOvers = parseFloat(latest.overs?.toString() || '0');
+        const currentOvers = parseFloat(current.overs?.toString() || '0');
+        return currentOvers > latestOvers ? current : latest;
+      }, awayScoresFallback[0]);
     } else {
       // Fallback: Try to find by scoreboard S2, but verify team_id matches
       const s2Score = scores.find((s: any) => s.scoreboard === 'S2');
@@ -404,13 +431,38 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     }
   } else if (isV2Format) {
     // v2.0 format: use live field and status as fallback
+    // CRITICAL: If match comes from livescores endpoint, it's LIVE by default
+    // Matches from livescores endpoint often have state_id: undefined but are actually live
+    const hasScoreData = scores.length > 0 && (homeScore.total > 0 || awayScore.total > 0 || homeScore.overs > 0 || awayScore.overs > 0);
+    
+    // Priority 1: Check live field (most reliable)
     if (apiMatch.live === true) {
       status = 'live';
-    } else if (apiMatch.status && (apiMatch.status.includes('Finished') || apiMatch.status.includes('Completed') || apiMatch.status.includes('Result'))) {
+    } 
+    // Priority 2: Check status field for completed
+    else if (apiMatch.status && (apiMatch.status.includes('Finished') || apiMatch.status.includes('Completed') || apiMatch.status.includes('Result'))) {
       status = 'completed';
-    } else if (apiMatch.status && apiMatch.status.includes('Innings')) {
+    } 
+    // Priority 3: Check status field for live indicators
+    else if (apiMatch.status && (apiMatch.status.includes('Innings') || apiMatch.status.includes('Live') || apiMatch.status.includes('In Progress'))) {
       status = 'live';
-    } else {
+    } 
+    // Priority 4: If we have score data, it's likely live
+    else if (hasScoreData) {
+      status = 'live';
+    } 
+    // Priority 5: If match has started (by time), consider it live
+    else if (apiMatch.starting_at) {
+      const startTime = new Date(apiMatch.starting_at);
+      const now = new Date();
+      if (startTime <= now) {
+        // Match has started - if it's not explicitly completed, it's likely live
+        status = 'live';
+      } else {
+        status = 'upcoming';
+      }
+    } 
+    else {
       status = 'upcoming';
     }
   } else {
@@ -586,8 +638,43 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       };
     } else {
       // v2.0 uses 'total' for runs, v3 uses 'score'
-      let homeRuns = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
-      let awayRuns = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
+      // IMPORTANT: Check if homeScore/awayScore actually have data before using them
+      // If a scoreboard exists but has no data (total: 0, overs: 0), it might be the 'extra' type
+      const homeHasData = homeScore.total > 0 || homeScore.overs > 0 || homeScore.wickets > 0;
+      const awayHasData = awayScore.total > 0 || awayScore.overs > 0 || awayScore.wickets > 0;
+      
+      let homeRuns = 0;
+      let awayRuns = 0;
+      
+      // Only use homeScore if it has actual data and belongs to home team
+      if (homeHasData && homeScore.team_id === localteamId) {
+        homeRuns = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
+      } else if (homeHasData && homeScore.team_id === visitorteamId) {
+        // homeScore actually belongs to away team - swap
+        awayRuns = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
+      }
+      
+      // Only use awayScore if it has actual data and belongs to away team
+      if (awayHasData && awayScore.team_id === visitorteamId) {
+        awayRuns = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
+      } else if (awayHasData && awayScore.team_id === localteamId) {
+        // awayScore actually belongs to home team - swap
+        homeRuns = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
+      }
+      
+      // Fallback: If we still don't have scores, try to find them from all scoreboards
+      if (homeRuns === 0 && awayRuns === 0 && isV2Format) {
+        // Find scoreboard for home team
+        const homeScoreboard = scores.find((s: any) => s.team_id === localteamId && s.type === 'total' && (s.total > 0 || s.overs > 0));
+        if (homeScoreboard) {
+          homeRuns = homeScoreboard.total || 0;
+        }
+        // Find scoreboard for away team
+        const awayScoreboard = scores.find((s: any) => s.team_id === visitorteamId && s.type === 'total' && (s.total > 0 || s.overs > 0));
+        if (awayScoreboard) {
+          awayRuns = awayScoreboard.total || 0;
+        }
+      }
       
       // Ensure we're using the correct scores for home and away
       // Double-check that homeScore and awayScore are actually different

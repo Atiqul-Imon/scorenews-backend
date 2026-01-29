@@ -37,14 +37,34 @@ export class SportsMonksService {
       
       this.logger.log(`Fetching live matches from ${endpoint}`, 'SportsMonksService');
       
+      // Use minimal include parameters for v2.0 API
+      // Start with basic includes to avoid authentication issues
+      const includeParam = sport === 'cricket' 
+        ? 'scoreboards,localteam,visitorteam' 
+        : 'scores,participants';
+      
+      if (!this.apiToken) {
+        this.logger.error('SPORTMONKS_API_TOKEN is missing!', '', 'SportsMonksService');
+        throw new Error('SportsMonks API token is not configured');
+      }
+      
+      this.logger.log(`Calling v2.0 API: ${endpoint}`, 'SportsMonksService');
+      
       const response = await firstValueFrom(
         this.httpService.get(endpoint, {
           params: {
             api_token: this.apiToken,
-            include: sport === 'cricket' ? 'scoreboards,localteam,visitorteam,batting.player,bowling.player' : 'scores,participants',
+            include: includeParam,
           },
         }),
       );
+      
+      // Check for error response
+      if (response.data?.status === 'error') {
+        const errorMsg = response.data?.message?.message || response.data?.message || 'Unknown error';
+        this.logger.error(`SportsMonks API error: ${errorMsg}`, '', 'SportsMonksService');
+        throw new Error(`SportsMonks API error: ${errorMsg}`);
+      }
 
       const matches = response.data?.data || [];
       this.logger.log(`Live scores endpoint returned ${matches.length} matches`, 'SportsMonksService');
@@ -62,14 +82,23 @@ export class SportsMonksService {
     } catch (error: any) {
       // If livescores endpoint fails, use fixtures endpoint as fallback
       // This is more reliable for detecting live matches
-      if (error.response?.status === 404 || error.response?.status === 403 || error.response?.status === 401) {
+      // Check for authentication errors (401) or authorization errors (403)
+      const errorStatus = error.response?.status;
+      const errorMessage = error.response?.data?.message || error.message || '';
+      
+      if (errorStatus === 404 || errorStatus === 403 || errorStatus === 401 || 
+          (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('unauthenticated'))) {
+        this.logger.warn(`Live scores endpoint failed (${errorStatus || 'unknown'}: ${errorMessage}), using fixtures endpoint as fallback`, 'SportsMonksService');
         this.logger.warn(`Live scores endpoint failed (${error.response?.status}), using fixtures endpoint as fallback`, 'SportsMonksService');
         
         try {
           const baseUrl = this.getBaseUrl(sport);
-          const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam,batting.player,bowling.player' : 'scores,participants';
+          // Use minimal includes for fixtures endpoint too
+          const includeParam = sport === 'cricket' 
+            ? 'scoreboards,localteam,visitorteam' 
+            : 'scores,participants';
           
-          this.logger.log(`Fetching from fixtures endpoint as fallback`, 'SportsMonksService');
+          this.logger.log(`Fetching from fixtures endpoint as fallback (v2.0)`, 'SportsMonksService');
           
           const response = await firstValueFrom(
             this.httpService.get(`${baseUrl}/fixtures`, {
