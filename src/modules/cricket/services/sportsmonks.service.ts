@@ -41,7 +41,7 @@ export class SportsMonksService {
         this.httpService.get(endpoint, {
           params: {
             api_token: this.apiToken,
-            include: sport === 'cricket' ? 'scoreboards,localteam,visitorteam' : 'scores,participants',
+            include: sport === 'cricket' ? 'scoreboards,localteam,visitorteam,batting.player,bowling.player' : 'scores,participants',
           },
         }),
       );
@@ -67,7 +67,7 @@ export class SportsMonksService {
         
         try {
           const baseUrl = this.getBaseUrl(sport);
-          const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam' : 'scores,participants';
+          const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam,batting.player,bowling.player' : 'scores,participants';
           
           this.logger.log(`Fetching from fixtures endpoint as fallback`, 'SportsMonksService');
           
