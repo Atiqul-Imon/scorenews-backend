@@ -535,7 +535,8 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     }
   }
 
-  // v2.0: venue can be string or object, v3: venue is object
+  // v2.0: venue is an object with name, city, country_id
+  // v3: venue is an object with name, city, country
   let venueData: any = {
     name: 'Unknown Venue',
     city: 'Unknown',
@@ -543,16 +544,24 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
   };
   
   if (isV2Format) {
-    // v2.0: venue can be a string or object
-    if (typeof apiMatch.venue === 'string') {
-      venueData.name = apiMatch.venue;
-      venueData.city = apiMatch.venue;
-    } else if (apiMatch.venue) {
+    // v2.0: venue is an object with name, city, country_id (not country)
+    if (apiMatch.venue && typeof apiMatch.venue === 'object' && apiMatch.venue.name) {
       venueData = {
         name: apiMatch.venue.name || 'Unknown Venue',
         city: apiMatch.venue.city || 'Unknown',
-        country: apiMatch.venue.country || 'Unknown',
+        // v2.0 doesn't have country field, only country_id
+        // Use city as fallback for country display
+        country: apiMatch.venue.country || apiMatch.venue.city || 'Unknown',
       };
+    } else if (typeof apiMatch.venue === 'string') {
+      // Fallback: if venue is a string (shouldn't happen with v2.0)
+      venueData.name = apiMatch.venue;
+      venueData.city = apiMatch.venue;
+    } else {
+      // No venue data available - log for debugging
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[Transformer] No venue data for match ${apiMatch.id}:`, apiMatch.venue);
+      }
     }
   } else {
     // v3: venue is always an object
@@ -718,20 +727,79 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         }
       }
       
+      // Extract wickets - API uses 'wickets' field (not 'w')
+      // CRITICAL: Always get wickets from the 'total' type scoreboard, not 'extra' type
+      // The 'extra' type scoreboard has wickets: 0, but 'total' type has the actual wickets
+      let homeWickets = 0;
+      let awayWickets = 0;
+      
+      if (isV2Format && scores.length > 0) {
+        // Find the 'total' type scoreboards for each team (these have the actual wickets)
+        const homeTotalScoreboard = scores.find((s: any) => 
+          s.team_id === localteamId && 
+          s.type === 'total' &&
+          (s.total > 0 || s.overs > 0)
+        );
+        const awayTotalScoreboard = scores.find((s: any) => 
+          s.team_id === visitorteamId && 
+          s.type === 'total' &&
+          (s.total > 0 || s.overs > 0)
+        );
+        
+        // Extract wickets from the correct scoreboard
+        if (homeTotalScoreboard) {
+          homeWickets = homeTotalScoreboard.wickets !== undefined ? homeTotalScoreboard.wickets : 0;
+        } else if (homeScore.team_id === localteamId && homeScore.type === 'total') {
+          // Fallback: use homeScore if it's the correct type
+          homeWickets = homeScore.wickets !== undefined ? homeScore.wickets : 0;
+        }
+        
+        if (awayTotalScoreboard) {
+          awayWickets = awayTotalScoreboard.wickets !== undefined ? awayTotalScoreboard.wickets : 0;
+        } else if (awayScore.team_id === visitorteamId && awayScore.type === 'total') {
+          // Fallback: use awayScore if it's the correct type
+          awayWickets = awayScore.wickets !== undefined ? awayScore.wickets : 0;
+        }
+      } else {
+        // Fallback for non-v2 format or if no scores
+        homeWickets = homeScore.wickets !== undefined ? homeScore.wickets : (homeScore.w !== undefined ? homeScore.w : 0);
+        awayWickets = awayScore.wickets !== undefined ? awayScore.wickets : (awayScore.w !== undefined ? awayScore.w : 0);
+      }
+      
       currentScore = {
         home: {
           runs: homeRuns,
-          wickets: homeScore.wickets || 0,
+          wickets: homeWickets,
           overs: parseFloat(homeScore.overs?.toString() || '0') || 0,
           balls: 0,
         },
         away: {
           runs: awayRuns,
-          wickets: awayScore.wickets || 0,
+          wickets: awayWickets,
           overs: parseFloat(awayScore.overs?.toString() || '0') || 0,
           balls: 0,
         },
       };
+      
+      // Debug logging for wickets
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[Transformer] Wickets extraction:', {
+          homeScore: {
+            team_id: homeScore.team_id,
+            wickets: homeScore.wickets,
+            w: homeScore.w,
+            final: homeWickets,
+            total: homeScore.total
+          },
+          awayScore: {
+            team_id: awayScore.team_id,
+            wickets: awayScore.wickets,
+            w: awayScore.w,
+            final: awayWickets,
+            total: awayScore.total
+          }
+        });
+      }
       
       // Final validation: Log if scores are identical (which might be legitimate in some cases)
       if (currentScore.home.runs === currentScore.away.runs && 

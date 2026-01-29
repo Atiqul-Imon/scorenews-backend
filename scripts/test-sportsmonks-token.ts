@@ -21,9 +21,16 @@ async function testToken() {
     const response = await axios.get('https://cricket.sportmonks.com/api/v2.0/livescores', {
       params: {
         api_token: SPORTMONKS_API_TOKEN,
-        include: 'scoreboards,localteam,visitorteam',
+        include: 'scoreboards,localteam,visitorteam,venue',
       },
     });
+    
+    // Log venue data from first match
+    if (response.data?.data && response.data.data.length > 0) {
+      const firstMatch = response.data.data[0];
+      console.log(`   Venue data:`, JSON.stringify(firstMatch.venue, null, 2));
+      console.log(`   Venue ID:`, firstMatch.venue_id);
+    }
 
     if (response.data?.status === 'error') {
       console.log(`   ❌ Error: ${response.data.message?.message || response.data.message}`);

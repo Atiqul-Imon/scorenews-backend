@@ -37,10 +37,10 @@ export class SportsMonksService {
       
       this.logger.log(`Fetching live matches from ${endpoint}`, 'SportsMonksService');
       
-      // Use minimal include parameters for v2.0 API
-      // Start with basic includes to avoid authentication issues
+      // Use include parameters for v2.0 API
+      // Include venue to show match location
       const includeParam = sport === 'cricket' 
-        ? 'scoreboards,localteam,visitorteam' 
+        ? 'scoreboards,localteam,visitorteam,venue' 
         : 'scores,participants';
       
       if (!this.apiToken) {
@@ -93,9 +93,9 @@ export class SportsMonksService {
         
         try {
           const baseUrl = this.getBaseUrl(sport);
-          // Use minimal includes for fixtures endpoint too
+          // Include venue for fixtures endpoint too
           const includeParam = sport === 'cricket' 
-            ? 'scoreboards,localteam,visitorteam' 
+            ? 'scoreboards,localteam,visitorteam,venue' 
             : 'scores,participants';
           
           this.logger.log(`Fetching from fixtures endpoint as fallback (v2.0)`, 'SportsMonksService');
