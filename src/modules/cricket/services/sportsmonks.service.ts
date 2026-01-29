@@ -449,21 +449,72 @@ export class SportsMonksService {
     try {
       // No caching - always fetch fresh data
       const baseUrl = this.getBaseUrl(sport);
-      const response = await firstValueFrom(
-        this.httpService.get(`${baseUrl}/commentaries/fixtures/${matchId}`, {
-          params: {
-            api_token: this.apiToken,
-            include: 'comments',
-          },
-        }),
-      );
+      
+      // v2.0 API: Commentary is available through 'balls' include
+      // Balls contain ball-by-ball data which can be used as commentary
+      this.logger.log(`Fetching ball-by-ball data (commentary) for match ${matchId}`, 'SportsMonksService');
+      
+      try {
+        const response = await firstValueFrom(
+          this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
+            params: {
+              api_token: this.apiToken,
+              include: 'balls.batsman,balls.bowler,balls.score,balls.batsmanout,balls.catchstump',
+            },
+          }),
+        );
 
-      const commentary = response.data?.data || [];
-      // No caching - return fresh data
-      return commentary;
+        const balls = response.data?.data?.balls || [];
+        
+        if (balls.length > 0) {
+          this.logger.log(`Found ${balls.length} ball-by-ball entries for commentary`, 'SportsMonksService');
+          // Transform balls into commentary format
+          return balls.map((ball: any, index: number) => ({
+            id: ball.id || index,
+            over: ball.over || 0,
+            ball: ball.ball || 0,
+            ballNumber: ball.ball || 0,
+            runs: ball.score?.runs || 0,
+            wickets: ball.score?.wickets || 0,
+            isWicket: ball.batsmanout !== null || ball.catchstump !== null,
+            batsman: ball.batsman?.name || ball.batsman?.fullname || '',
+            bowler: ball.bowler?.name || ball.bowler?.fullname || '',
+            commentary: this.generateCommentaryText(ball),
+            timestamp: ball.updated_at || ball.created_at || new Date().toISOString(),
+          }));
+        } else {
+          this.logger.warn(`No ball-by-ball data available for match ${matchId}`, 'SportsMonksService');
+          return [];
+        }
+      } catch (error: any) {
+        this.logger.error(`Error fetching ball-by-ball data for ${matchId}: ${error.message}`, '', 'SportsMonksService');
+        if (error.response?.status === 400) {
+          this.logger.warn(`Balls include may not be available for this match or subscription`, 'SportsMonksService');
+        }
+        return [];
+      }
     } catch (error: any) {
       this.logger.error(`Error fetching ${sport} commentary for ${matchId}`, error.stack, 'SportsMonksService');
-      throw error;
+      return [];
+    }
+  }
+
+  private generateCommentaryText(ball: any): string {
+    const runs = ball.score?.runs || 0;
+    const isWicket = ball.batsmanout !== null || ball.catchstump !== null;
+    const batsman = ball.batsman?.name || ball.batsman?.fullname || 'Batsman';
+    const bowler = ball.bowler?.name || ball.bowler?.fullname || 'Bowler';
+    
+    if (isWicket) {
+      return `Wicket! ${batsman} out. ${bowler} takes the wicket.`;
+    } else if (runs === 6) {
+      return `Six! ${batsman} hits it out of the park.`;
+    } else if (runs === 4) {
+      return `Four! ${batsman} finds the boundary.`;
+    } else if (runs > 0) {
+      return `${runs} run${runs > 1 ? 's' : ''} scored by ${batsman}.`;
+    } else {
+      return `Dot ball. ${bowler} to ${batsman}.`;
     }
   }
 }
