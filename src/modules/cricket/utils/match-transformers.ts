@@ -1,3 +1,5 @@
+import { determineMatchStatus } from './status-determiner';
+
 /**
  * Extract player name from various possible API response structures
  * Checks multiple locations where player data might be stored
@@ -536,61 +538,14 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
 
   let status: 'live' | 'completed' | 'upcoming' | 'cancelled' = 'upcoming';
   
-  // Check state_id first (available in both v2.0 and v3)
-  const stateId = apiMatch.state_id;
-  if (stateId !== undefined) {
-    if (stateId === 5 || stateId === 6) {
-      status = 'completed';
-    } else if (stateId === 3 || stateId === 4) {
-      status = 'live';
-    } else if (stateId === 1 || stateId === 2) {
-      status = 'upcoming';
-    }
-  } else if (isV2Format) {
-    // v2.0 format: use live field and status as fallback
-    // CRITICAL: If match comes from livescores endpoint, it's LIVE by default
-    // Matches from livescores endpoint often have state_id: undefined but are actually live
-    const hasScoreData = scores.length > 0 && (homeScore.total > 0 || awayScore.total > 0 || homeScore.overs > 0 || awayScore.overs > 0);
-    
-    // Priority 1: Check live field (most reliable)
-    if (apiMatch.live === true) {
-      status = 'live';
-    } 
-    // Priority 2: Check status field for completed
-    else if (apiMatch.status && (apiMatch.status.includes('Finished') || apiMatch.status.includes('Completed') || apiMatch.status.includes('Result'))) {
-      status = 'completed';
-    } 
-    // Priority 3: Check status field for live indicators
-    else if (apiMatch.status && (apiMatch.status.includes('Innings') || apiMatch.status.includes('Live') || apiMatch.status.includes('In Progress'))) {
-      status = 'live';
-    } 
-    // Priority 4: If we have score data, it's likely live
-    else if (hasScoreData) {
-      status = 'live';
-    } 
-    // Priority 5: If match has started (by time), consider it live
-    else if (apiMatch.starting_at) {
-      const startTime = new Date(apiMatch.starting_at);
-      const now = new Date();
-      if (startTime <= now) {
-        // Match has started - if it's not explicitly completed, it's likely live
-        status = 'live';
-      } else {
-        status = 'upcoming';
-      }
-    } 
-    else {
-      status = 'upcoming';
-    }
-  } else {
-    // v3 format fallback (shouldn't reach here if state_id exists)
-    if (stateId === 5 || stateId === 6) {
-      status = 'completed';
-    } else if (stateId === 3 || stateId === 4) {
-      status = 'live';
-    } else if (stateId === 1) {
-      status = 'upcoming';
-    }
+  // All SportsMonks API calls are v2.0 format
+  // Use enterprise-grade status determination
+  const statusResult = determineMatchStatus(apiMatch);
+  status = statusResult.status;
+  
+  // Log status determination for debugging (only in development)
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[Transformer] Match ${apiMatch.id} status: ${status} (${statusResult.confidence}) - ${statusResult.reason}`);
   }
 
   // Additional check: If match appears live but both innings are complete, mark as completed
@@ -931,11 +886,11 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         });
       }
       
-      // Final check: If both teams have completed their innings, mark as completed
-      // This handles cases where state_id is 3/4 but match is actually finished
+      // CRITICAL VERIFICATION: Always verify match status against scorecard data
+      // This prevents false positives when API's state_id says completed but match is still in progress
       // IMPORTANT: Only mark as completed if BOTH teams have finished AND scores are different
       // CRITICAL: Must verify BOTH innings are complete - don't mark as completed if only one team is done
-      if (status === 'live' && currentScore && homeScore.team_id !== awayScore.team_id) {
+      if (currentScore && homeScore.team_id !== awayScore.team_id) {
         const matchType = (apiMatch.type || '').toLowerCase();
         const isT20 = matchType.includes('t20');
         const isODI = matchType.includes('odi');
@@ -957,6 +912,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
             homeHasScore && awayHasScore;
         
         if (bothInningsComplete) {
+          // Both innings are complete - match is truly finished
           console.log('[Transformer] Match marked as completed: both innings finished based on scorecard', {
             homeAllOut,
             awayAllOut,
@@ -970,6 +926,24 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
           status = 'completed';
           // Also set matchEnded flag
           apiMatch.matchEnded = true;
+        } else if (status === 'completed' && !bothInningsComplete) {
+          // CRITICAL FIX: API says completed but scorecard shows match is still in progress
+          // Override the status to 'live' to prevent false completion
+          console.warn('[Transformer] CRITICAL: API state_id says completed but scorecard shows match is still in progress!', {
+            stateId: apiMatch.state_id,
+            homeOvers: currentScore.home.overs,
+            homeWickets: currentScore.home.wickets,
+            homeAllOut,
+            homeReachedMax,
+            awayOvers: currentScore.away.overs,
+            awayWickets: currentScore.away.wickets,
+            awayAllOut,
+            awayReachedMax,
+            maxOvers
+          });
+          console.warn('[Transformer] Overriding status from "completed" to "live" based on scorecard verification');
+          status = 'live';
+          apiMatch.matchEnded = false;
         } else if ((homeAllOut || homeReachedMax) && !(awayAllOut || awayReachedMax)) {
           // Log warning if only one team is done (should not mark as completed)
           console.log('[Transformer] WARNING: Only one innings complete, keeping match as live', {
@@ -986,16 +960,17 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
 
   let score: any = undefined;
   if (status === 'completed' && scores.length > 0) {
-    // Use total for v2.0, score for v3
-    const homeFinal = isV2Format ? (homeScore.total || 0) : (homeScore.score || 0);
-    const awayFinal = isV2Format ? (awayScore.total || 0) : (awayScore.score || 0);
+    // Use total for v2.0 format
+    const homeFinal = homeScore.total || 0;
+    const awayFinal = awayScore.total || 0;
     score = {
       home: homeFinal,
       away: awayFinal,
     };
   }
 
-  // Extract match result for completed matches
+  // Extract match result ONLY for completed matches
+  // CRITICAL: Do NOT calculate or show results for live matches
   // Priority: Use API's note field (official result) > Calculate from scores
   let matchResult: any = undefined;
   if (status === 'completed') {
@@ -1019,13 +994,13 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     
     // Fallback: Calculate from scores if API note is not available or parsing failed
     if (!matchResult && currentScore && scores.length >= 2) {
-      matchResult = calculateMatchResult(
+        matchResult = calculateMatchResult(
         currentScore,
         scores,
         teams,
         apiMatch.localteam_id,
         apiMatch.visitorteam_id,
-        isV2Format,
+        true, // Always v2.0 format
         apiMatch.winner_team_id // Use API's winner_team_id if available
       );
       if (matchResult) {
@@ -1051,12 +1026,10 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     score,
     matchStarted: status === 'live' || status === 'completed',
     matchEnded: status === 'completed',
-    series: isV2Format 
-      ? (apiMatch.league?.name || apiMatch.season?.name || apiMatch.round || 'Unknown Series')
-      : (apiMatch.league?.name || apiMatch.season?.name || 'Unknown Series'),
+    series: apiMatch.league?.name || apiMatch.season?.name || apiMatch.round || 'Unknown Series',
     detailUrl: sport === 'football' ? `/football/match/${apiMatch.id}` : `/cricket/match/${apiMatch.id}`,
-    // Add innings data for scorecard if available (v2.0 format)
-    innings: isV2Format && scores.length > 0
+    // Add innings data for scorecard (v2.0 format)
+    innings: scores.length > 0
       ? scores
           .filter((s: any) => s.total !== undefined && s.overs !== undefined && s.total > 0)
           .map((s: any, index: number) => ({
@@ -1083,8 +1056,8 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       ? parseInt(apiMatch.note.match(/Target (\d+)/)?.[1] || '0')
       : undefined,
     endingAt: apiMatch.ending_at ? new Date(apiMatch.ending_at) : undefined,
-    // Match result (from API note or calculated)
-    result: matchResult,
+    // Match result (ONLY for completed matches - undefined for live matches)
+    result: status === 'completed' ? matchResult : undefined,
     // Additional API fields for completed matches
     apiNote: apiMatch.note || undefined, // Raw API note field
     tossWonTeamId: apiMatch.toss_won_team_id?.toString() || undefined,
