@@ -69,18 +69,24 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto) {
-    const { email, password } = loginDto;
+    const { emailOrPhone, password } = loginDto;
 
-    // Find user with password
-    const user = await this.userModel.findOne({ email }).select('+password');
+    // Try to find user by email first, then by phone number
+    let user = await this.userModel.findOne({ email: emailOrPhone.toLowerCase() }).select('+password');
+    
+    // If not found by email, try phone number (for scorers)
     if (!user) {
-      throw new UnauthorizedException('Invalid email or password');
+      user = await this.userModel.findOne({ 'scorerProfile.phone': emailOrPhone }).select('+password');
+    }
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid email/phone or password');
     }
 
     // Check password
     const isPasswordValid = await (user as any).comparePassword(password);
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException('Invalid email/phone or password');
     }
 
     // Update last login
