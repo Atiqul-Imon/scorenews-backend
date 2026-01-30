@@ -176,6 +176,19 @@ export class MatchTransitionService {
       }
 
       // 6. Create CompletedMatch
+      const finalScore = {
+        home: {
+          runs: transformed.currentScore?.home?.runs || 0,
+          wickets: transformed.currentScore?.home?.wickets || 0,
+          overs: transformed.currentScore?.home?.overs || 0,
+        },
+        away: {
+          runs: transformed.currentScore?.away?.runs || 0,
+          wickets: transformed.currentScore?.away?.wickets || 0,
+          overs: transformed.currentScore?.away?.overs || 0,
+        },
+      };
+
       const completedMatch: CompletedMatch = {
         matchId: transformed.matchId,
         series: transformed.series,
@@ -184,16 +197,20 @@ export class MatchTransitionService {
         format: transformed.format,
         startTime: transformed.startTime,
         endTime: transformed.endTime || new Date(),
-        finalScore: {
+        finalScore,
+        // Frontend compatibility: also include currentScore (mapped from finalScore)
+        currentScore: {
           home: {
-            runs: transformed.currentScore?.home?.runs || 0,
-            wickets: transformed.currentScore?.home?.wickets || 0,
-            overs: transformed.currentScore?.home?.overs || 0,
+            runs: finalScore.home.runs,
+            wickets: finalScore.home.wickets,
+            overs: finalScore.home.overs,
+            balls: 0, // Completed matches don't track balls
           },
           away: {
-            runs: transformed.currentScore?.away?.runs || 0,
-            wickets: transformed.currentScore?.away?.wickets || 0,
-            overs: transformed.currentScore?.away?.overs || 0,
+            runs: finalScore.away.runs,
+            wickets: finalScore.away.wickets,
+            overs: finalScore.away.overs,
+            balls: 0, // Completed matches don't track balls
           },
         },
         result: {

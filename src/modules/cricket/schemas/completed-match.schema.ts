@@ -83,6 +83,13 @@ export class CompletedMatch {
     away: { runs: number; wickets: number; overs: number };
   };
 
+  // Frontend compatibility: map finalScore to currentScore
+  // This is a virtual field that will be added during transformation
+  currentScore?: {
+    home: { runs: number; wickets: number; overs: number; balls: number };
+    away: { runs: number; wickets: number; overs: number; balls: number };
+  };
+
   @Prop({
     type: {
       winner: { type: String, enum: ['home', 'away', 'draw'], required: true },

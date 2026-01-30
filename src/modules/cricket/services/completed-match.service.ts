@@ -54,8 +54,28 @@ export class CompletedMatchService {
 
       const total = await this.completedMatchModel.countDocuments(filter);
 
+      // Transform for frontend compatibility: map finalScore to currentScore
+      const transformedMatches = (matches as CompletedMatch[]).map((match) => ({
+        ...match,
+        // Frontend expects currentScore, so map finalScore to currentScore
+        currentScore: match.finalScore ? {
+          home: {
+            runs: match.finalScore.home.runs,
+            wickets: match.finalScore.home.wickets,
+            overs: match.finalScore.home.overs,
+            balls: 0, // Completed matches don't have balls
+          },
+          away: {
+            runs: match.finalScore.away.runs,
+            wickets: match.finalScore.away.wickets,
+            overs: match.finalScore.away.overs,
+            balls: 0, // Completed matches don't have balls
+          },
+        } : undefined,
+      }));
+
       return {
-        matches: matches as CompletedMatch[],
+        matches: transformedMatches,
         pagination: {
           current: page,
           pages: Math.ceil(total / limit),
@@ -139,6 +159,19 @@ export class CompletedMatchService {
           }
 
           // Convert to CompletedMatch format
+          const finalScore = {
+            home: {
+              runs: transformed.currentScore?.home?.runs || 0,
+              wickets: transformed.currentScore?.home?.wickets || 0,
+              overs: transformed.currentScore?.home?.overs || 0,
+            },
+            away: {
+              runs: transformed.currentScore?.away?.runs || 0,
+              wickets: transformed.currentScore?.away?.wickets || 0,
+              overs: transformed.currentScore?.away?.overs || 0,
+            },
+          };
+
           const completedMatch: CompletedMatch = {
             matchId: transformed.matchId,
             series: transformed.series,
@@ -147,16 +180,20 @@ export class CompletedMatchService {
             format: transformed.format,
             startTime: transformed.startTime,
             endTime: transformed.endTime || new Date(),
-            finalScore: {
+            finalScore,
+            // Frontend compatibility: also include currentScore (mapped from finalScore)
+            currentScore: {
               home: {
-                runs: transformed.currentScore?.home?.runs || 0,
-                wickets: transformed.currentScore?.home?.wickets || 0,
-                overs: transformed.currentScore?.home?.overs || 0,
+                runs: finalScore.home.runs,
+                wickets: finalScore.home.wickets,
+                overs: finalScore.home.overs,
+                balls: 0, // Completed matches don't track balls
               },
               away: {
-                runs: transformed.currentScore?.away?.runs || 0,
-                wickets: transformed.currentScore?.away?.wickets || 0,
-                overs: transformed.currentScore?.away?.overs || 0,
+                runs: finalScore.away.runs,
+                wickets: finalScore.away.wickets,
+                overs: finalScore.away.overs,
+                balls: 0, // Completed matches don't track balls
               },
             },
             result: {
@@ -287,7 +324,25 @@ export class CompletedMatchService {
       const match = await this.completedMatchModel.findOne({ matchId: sanitizedId }).lean();
       
       if (match) {
-        return match as CompletedMatch;
+        // Transform for frontend compatibility: map finalScore to currentScore
+        const transformedMatch = {
+          ...match,
+          currentScore: (match as CompletedMatch).finalScore ? {
+            home: {
+              runs: (match as CompletedMatch).finalScore.home.runs,
+              wickets: (match as CompletedMatch).finalScore.home.wickets,
+              overs: (match as CompletedMatch).finalScore.home.overs,
+              balls: 0,
+            },
+            away: {
+              runs: (match as CompletedMatch).finalScore.away.runs,
+              wickets: (match as CompletedMatch).finalScore.away.wickets,
+              overs: (match as CompletedMatch).finalScore.away.overs,
+              balls: 0,
+            },
+          } : undefined,
+        };
+        return transformedMatch as CompletedMatch;
       }
 
       // If not in database, fetch single match from API (more efficient)
@@ -385,6 +440,19 @@ export class CompletedMatchService {
       }
 
       // Convert to CompletedMatch format
+      const finalScore = {
+        home: {
+          runs: transformed.currentScore?.home?.runs || 0,
+          wickets: transformed.currentScore?.home?.wickets || 0,
+          overs: transformed.currentScore?.home?.overs || 0,
+        },
+        away: {
+          runs: transformed.currentScore?.away?.runs || 0,
+          wickets: transformed.currentScore?.away?.wickets || 0,
+          overs: transformed.currentScore?.away?.overs || 0,
+        },
+      };
+
       const completedMatch: CompletedMatch = {
         matchId: transformed.matchId,
         series: transformed.series,
@@ -393,16 +461,20 @@ export class CompletedMatchService {
         format: transformed.format,
         startTime: transformed.startTime,
         endTime: transformed.endTime || new Date(),
-        finalScore: {
+        finalScore,
+        // Frontend compatibility: also include currentScore (mapped from finalScore)
+        currentScore: {
           home: {
-            runs: transformed.currentScore?.home?.runs || 0,
-            wickets: transformed.currentScore?.home?.wickets || 0,
-            overs: transformed.currentScore?.home?.overs || 0,
+            runs: finalScore.home.runs,
+            wickets: finalScore.home.wickets,
+            overs: finalScore.home.overs,
+            balls: 0, // Completed matches don't track balls
           },
           away: {
-            runs: transformed.currentScore?.away?.runs || 0,
-            wickets: transformed.currentScore?.away?.wickets || 0,
-            overs: transformed.currentScore?.away?.overs || 0,
+            runs: finalScore.away.runs,
+            wickets: finalScore.away.wickets,
+            overs: finalScore.away.overs,
+            balls: 0, // Completed matches don't track balls
           },
         },
         result: {
