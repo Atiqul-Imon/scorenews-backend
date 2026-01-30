@@ -40,6 +40,12 @@ export class ScorerRegistrationDto {
   @IsEmail()
   email?: string;
 
+  @ApiProperty({ description: 'Password', example: 'SecurePassword123', minLength: 6 })
+  @IsString()
+  @MinLength(6)
+  @MaxLength(100)
+  password: string;
+
   @ApiProperty({ description: 'Location details', type: LocationDto })
   @ValidateNested()
   @Type(() => LocationDto)

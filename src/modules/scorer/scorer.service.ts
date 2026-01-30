@@ -3,7 +3,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { ScorerRegistrationDto } from './dto/scorer-registration.dto';
-import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -13,7 +12,7 @@ export class ScorerService {
   ) {}
 
   async registerScorer(registerDto: ScorerRegistrationDto) {
-    const { name, phone, email, location, scorerType, termsAccepted } = registerDto;
+    const { name, phone, email, password, location, scorerType, termsAccepted } = registerDto;
 
     // Validate terms acceptance
     if (!termsAccepted) {
@@ -44,14 +43,11 @@ export class ScorerService {
     // Official scorers need verification, others are auto-approved
     const verificationStatus = scorerType === 'official' ? 'pending' : 'verified';
 
-    // Generate secure random password
-    const tempPassword = crypto.randomBytes(16).toString('hex');
-
     // Create user with scorer profile
     const userData: any = {
       name,
       email: email?.toLowerCase() || `scorer-${phone.replace(/\D/g, '')}@scorenews.net`, // Generate email if not provided
-      password: tempPassword, // Temporary password, user will need to reset password via forgot password
+      password: password, // User-provided password
       role: 'scorer',
       isVerified: verificationStatus === 'verified',
       scorerProfile: {
