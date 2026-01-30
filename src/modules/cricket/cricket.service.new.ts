@@ -130,14 +130,13 @@ export class CricketService {
           const statusResult = determineMatchStatus(apiMatch);
           
           if (statusResult.status === 'live') {
-            // Process single match instead of fetching all
-            const processed = await this.liveMatchService.fetchAndUpdateLiveMatches();
-            const match = processed.find(m => m.matchId === id) || await this.liveMatchService.getLiveMatchById(id);
+            await this.liveMatchService.fetchAndUpdateLiveMatches();
+            const match = await this.liveMatchService.getLiveMatchById(id);
             if (match) {
               return { success: true, data: match };
             }
           } else if (statusResult.status === 'completed') {
-            // Use getCompletedMatchById which handles single match fetch efficiently
+            await this.completedMatchService.fetchAndSaveCompletedMatches();
             const match = await this.completedMatchService.getCompletedMatchById(id);
             if (match) {
               return { success: true, data: match };
@@ -254,4 +253,5 @@ export class CricketService {
     };
   }
 }
+
 

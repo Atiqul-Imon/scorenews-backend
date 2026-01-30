@@ -1,3 +1,5 @@
+import { determineMatchStatus } from './status-determiner';
+
 /**
  * Extract player name from various possible API response structures
  * Checks multiple locations where player data might be stored
@@ -537,55 +539,13 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
   let status: 'live' | 'completed' | 'upcoming' | 'cancelled' = 'upcoming';
   
   // All SportsMonks API calls are v2.0 format
-  // state_id is often undefined in v2.0, so we prioritize live field and status field
-  const stateId = apiMatch.state_id;
+  // Use enterprise-grade status determination
+  const statusResult = determineMatchStatus(apiMatch);
+  status = statusResult.status;
   
-  // v2.0 format: Prioritize live field and status field over state_id
-  // CRITICAL: If match comes from livescores endpoint, it's LIVE by default
-  // Matches from livescores endpoint often have state_id: undefined but are actually live
-  
-  // Priority 1: Check live field (most reliable for v2.0)
-  if (apiMatch.live === true) {
-    status = 'live';
-  } 
-  // Priority 2: Check state_id if available (for v2.0, this might be undefined)
-  else if (stateId !== undefined) {
-    if (stateId === 5 || stateId === 6) {
-      status = 'completed';
-    } else if (stateId === 3 || stateId === 4) {
-      status = 'live';
-    } else if (stateId === 1 || stateId === 2) {
-      status = 'upcoming';
-    }
-  }
-  // Priority 3: Check status field for completed
-  else if (apiMatch.status && (apiMatch.status.includes('Finished') || apiMatch.status.includes('Completed') || apiMatch.status.includes('Result'))) {
-    status = 'completed';
-  } 
-  // Priority 4: Check status field for live indicators (e.g., "2nd Innings", "1st Innings")
-  else if (apiMatch.status && (apiMatch.status.includes('Innings') || apiMatch.status.includes('Live') || apiMatch.status.includes('In Progress'))) {
-    status = 'live';
-  } 
-  // Priority 5: If we have score data, it's likely live
-  else {
-    const hasScoreData = scores.length > 0 && (homeScore.total > 0 || awayScore.total > 0 || homeScore.overs > 0 || awayScore.overs > 0);
-    if (hasScoreData) {
-      status = 'live';
-    } 
-    // Priority 6: If match has started (by time), consider it live
-    else if (apiMatch.starting_at) {
-      const startTime = new Date(apiMatch.starting_at);
-      const now = new Date();
-      if (startTime <= now) {
-        // Match has started - if it's not explicitly completed, it's likely live
-        status = 'live';
-      } else {
-        status = 'upcoming';
-      }
-    } 
-    else {
-      status = 'upcoming';
-    }
+  // Log status determination for debugging (only in development)
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[Transformer] Match ${apiMatch.id} status: ${status} (${statusResult.confidence}) - ${statusResult.reason}`);
   }
 
   // Additional check: If match appears live but both innings are complete, mark as completed
