@@ -864,9 +864,16 @@ export class CricketService {
           const homeReachedMax = maxOvers !== undefined && match.currentScore.home?.overs >= maxOvers;
           const awayReachedMax = maxOvers !== undefined && match.currentScore.away?.overs >= maxOvers;
           
-          // If both innings are complete, exclude from live
-          if ((homeAllOut && awayAllOut) || (homeReachedMax && awayReachedMax) || 
-              (homeAllOut && awayReachedMax) || (homeReachedMax && awayAllOut)) {
+          // SAFETY CHECK: Ensure both teams have valid score data
+          const homeHasScore = match.currentScore.home && (match.currentScore.home.overs > 0 || match.currentScore.home.wickets > 0);
+          const awayHasScore = match.currentScore.away && (match.currentScore.away.overs > 0 || match.currentScore.away.wickets > 0);
+          
+          // If both innings are complete AND both have valid scores, exclude from live
+          const bothInningsComplete = ((homeAllOut && awayAllOut) || (homeReachedMax && awayReachedMax) || 
+              (homeAllOut && awayReachedMax) || (homeReachedMax && awayAllOut)) &&
+              homeHasScore && awayHasScore;
+          
+          if (bothInningsComplete) {
             // Update status in database asynchronously
             this.cricketMatchModel.updateOne(
               { matchId: match.matchId },
@@ -875,6 +882,9 @@ export class CricketService {
               this.logger.error(`Error updating match ${match.matchId} status to completed`, err, 'CricketService');
             });
             return false;
+          } else if ((homeAllOut || homeReachedMax) && !(awayAllOut || awayReachedMax) && homeHasScore && awayHasScore) {
+            // Log warning if only one team is done (should not mark as completed)
+            this.logger.warn(`Match ${match.matchId} has only one innings complete - keeping as live`, 'CricketService');
           }
         }
         return true;

@@ -118,3 +118,9 @@ To verify a match result is correct:
 2. Check database: Verify `result.winnerName` matches API's `winner_team_id`
 3. Check calculation: Verify margin type (runs vs wickets) is correct based on batting order
 
+
+
+
+
+
+
