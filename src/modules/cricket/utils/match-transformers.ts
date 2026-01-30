@@ -934,6 +934,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       // Final check: If both teams have completed their innings, mark as completed
       // This handles cases where state_id is 3/4 but match is actually finished
       // IMPORTANT: Only mark as completed if BOTH teams have finished AND scores are different
+      // CRITICAL: Must verify BOTH innings are complete - don't mark as completed if only one team is done
       if (status === 'live' && currentScore && homeScore.team_id !== awayScore.team_id) {
         const matchType = (apiMatch.type || '').toLowerCase();
         const isT20 = matchType.includes('t20');
@@ -945,9 +946,15 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         const homeReachedMax = maxOvers !== undefined && currentScore.home.overs >= maxOvers;
         const awayReachedMax = maxOvers !== undefined && currentScore.away.overs >= maxOvers;
         
+        // SAFETY CHECK: Ensure both teams have valid score data before checking completion
+        const homeHasScore = currentScore.home && (currentScore.home.overs > 0 || currentScore.home.wickets > 0);
+        const awayHasScore = currentScore.away && (currentScore.away.overs > 0 || currentScore.away.wickets > 0);
+        
         // Only mark as completed if BOTH teams have completed their innings
-        const bothInningsComplete = (homeAllOut && awayAllOut) || (homeReachedMax && awayReachedMax) || 
-            (homeAllOut && awayReachedMax) || (homeReachedMax && awayAllOut);
+        // AND both teams have valid score data (to prevent false positives)
+        const bothInningsComplete = ((homeAllOut && awayAllOut) || (homeReachedMax && awayReachedMax) || 
+            (homeAllOut && awayReachedMax) || (homeReachedMax && awayAllOut)) &&
+            homeHasScore && awayHasScore;
         
         if (bothInningsComplete) {
           console.log('[Transformer] Match marked as completed: both innings finished based on scorecard', {
@@ -963,6 +970,15 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
           status = 'completed';
           // Also set matchEnded flag
           apiMatch.matchEnded = true;
+        } else if ((homeAllOut || homeReachedMax) && !(awayAllOut || awayReachedMax)) {
+          // Log warning if only one team is done (should not mark as completed)
+          console.log('[Transformer] WARNING: Only one innings complete, keeping match as live', {
+            homeAllOut,
+            homeReachedMax,
+            homeOvers: currentScore.home.overs,
+            awayOvers: currentScore.away.overs,
+            awayWickets: currentScore.away.wickets
+          });
         }
       }
     }
