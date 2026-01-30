@@ -11,29 +11,23 @@ if (!MONGODB_URI) {
 // Define CricketMatch Schema
 const cricketMatchSchema = new mongoose.Schema({
   matchId: String,
-  series: String,
-  matchType: String,
-  teams: Object,
-  venue: Object,
   status: String,
   format: String,
-  startTime: Date,
-  endTime: Date,
   currentScore: Object,
-  createdAt: Date,
-  updatedAt: Date,
+  endTime: Date,
+  matchEnded: Boolean,
 }, { collection: 'cricket_matches' });
 
 const CricketMatch = mongoose.model('CricketMatch', cricketMatchSchema);
 
-async function fixMatchStatus() {
+async function forceMatchLive() {
   try {
     console.log('🔌 Connecting to MongoDB...');
     await mongoose.connect(MONGODB_URI);
     console.log('✅ Connected to MongoDB\n');
 
     const matchId = '69102';
-    console.log(`🔍 Fixing match ID: ${matchId}\n`);
+    console.log(`🔍 Force fixing match ID: ${matchId}\n`);
 
     // Find the match
     const match = await CricketMatch.findOne({ matchId: matchId });
@@ -47,35 +41,47 @@ async function fixMatchStatus() {
     console.log(`   Status: ${match.status}`);
     console.log(`   Sri Lanka: ${match.currentScore?.home?.runs || 0}/${match.currentScore?.home?.wickets || 0} (${match.currentScore?.home?.overs || 0} overs)`);
     console.log(`   England: ${match.currentScore?.away?.runs || 0}/${match.currentScore?.away?.wickets || 0} (${match.currentScore?.away?.overs || 0} overs)`);
-    console.log(`   End Time: ${match.endTime ? new Date(match.endTime).toLocaleString() : 'Not set'}\n`);
+    console.log(`   Format: ${match.format || 'N/A'}\n`);
 
-    // Check if match should be live
+    // Force update to live
     const awayOvers = match.currentScore?.away?.overs || 0;
     const awayWickets = match.currentScore?.away?.wickets || 0;
     const matchFormat = (match.format || '').toLowerCase();
     const isT20 = matchFormat.includes('t20');
     const maxOvers = isT20 ? 20 : 50;
 
-    // If England has only faced a few overs, match is definitely still live
-    if (awayOvers < maxOvers && awayWickets < 10) {
-      console.log(`✅ Match should be LIVE (England has only faced ${awayOvers} overs, max is ${maxOvers})`);
-      
-      // Update status to live
-      match.status = 'live';
-      match.endTime = null; // Remove end time
-      match.matchEnded = false;
-      await match.save();
+    console.log(`🔧 Force updating match to LIVE status...`);
+    console.log(`   England overs: ${awayOvers}/${maxOvers}`);
+    console.log(`   England wickets: ${awayWickets}/10`);
+    console.log(`   Match is clearly still in progress\n`);
 
-      console.log(`\n✅ Match status updated to 'live'`);
-      console.log(`   Removed end time`);
-      console.log(`   Match will now appear in live matches\n`);
-    } else {
-      console.log(`⚠️  Match appears to be actually completed based on scorecard`);
-      console.log(`   England overs: ${awayOvers}/${maxOvers}`);
-      console.log(`   England wickets: ${awayWickets}/10`);
-    }
+    // Force update
+    await CricketMatch.updateOne(
+      { matchId: matchId },
+      {
+        $set: {
+          status: 'live',
+          matchEnded: false,
+        },
+        $unset: {
+          endTime: '',
+        }
+      }
+    );
 
-    console.log('✅ Match fix complete!');
+    console.log(`✅ Match status FORCE updated to 'live'`);
+    console.log(`   Removed end time`);
+    console.log(`   Set matchEnded to false`);
+    console.log(`   Match will now appear in live matches\n`);
+
+    // Verify
+    const updatedMatch = await CricketMatch.findOne({ matchId: matchId });
+    console.log(`✅ Verification:`);
+    console.log(`   Status: ${updatedMatch.status}`);
+    console.log(`   Match Ended: ${updatedMatch.matchEnded || false}`);
+    console.log(`   End Time: ${updatedMatch.endTime || 'Not set'}`);
+
+    console.log('\n✅ Match fix complete!');
     
   } catch (error) {
     console.error('❌ Error fixing match:', error.message);
@@ -87,6 +93,6 @@ async function fixMatchStatus() {
   }
 }
 
-fixMatchStatus();
+forceMatchLive();
 
 

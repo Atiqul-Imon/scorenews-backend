@@ -285,12 +285,14 @@ export class CricketService {
         return;
       }
 
-      // Check if both innings are complete (even if status is 'live')
+      // CRITICAL: Trust the API status - don't override it based on scorecard alone
+      // The API is the source of truth for match status
       let finalStatus = matchData.status;
       let matchEnded = matchData.matchEnded || false;
       const isTransitioningToCompleted = finalStatus === 'completed' || matchEnded;
       
-      if (matchData.currentScore && matchData.format) {
+      // Only verify completion if API says completed - don't mark as completed if API says live
+      if (matchData.currentScore && matchData.format && finalStatus === 'completed') {
         const matchType = (matchData.format || '').toLowerCase();
         const isT20 = matchType.includes('t20');
         const isODI = matchType.includes('odi');
@@ -301,34 +303,24 @@ export class CricketService {
         const homeReachedMax = maxOvers !== undefined && matchData.currentScore.home?.overs >= maxOvers;
         const awayReachedMax = maxOvers !== undefined && matchData.currentScore.away?.overs >= maxOvers;
         
-        // Check if both teams have scores (both innings have started)
-        const bothTeamsBatted = matchData.currentScore.home?.runs !== undefined && 
-                               matchData.currentScore.away?.runs !== undefined;
+        // Verify that both innings are actually complete
+        const bothInningsComplete = (homeAllOut && awayAllOut) || 
+                                   (homeReachedMax && awayReachedMax) || 
+                                   (homeAllOut && awayReachedMax) || 
+                                   (awayReachedMax && homeAllOut);
         
-        // Check time since match started (for matches that may have ended but API still shows as live)
-        let hoursSinceStart = 0;
-        if (matchData.startTime) {
-          const startTime = new Date(matchData.startTime);
-          const now = new Date();
-          hoursSinceStart = (now.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+        // If API says completed but scorecard shows match is still in progress, override to live
+        if (!bothInningsComplete) {
+          this.logger.warn(`Match ${matchData.matchId}: API says completed but scorecard shows match is still in progress - overriding to live`, 'CricketService');
+          finalStatus = 'live';
+          matchEnded = false;
         }
-        
-        // If both innings are complete (both all out OR both reached max overs), mark as completed
-        if ((homeAllOut && awayAllOut) || (homeReachedMax && awayReachedMax) || 
-            (homeAllOut && awayReachedMax) || (homeReachedMax && awayAllOut)) {
-          finalStatus = 'completed';
-          matchEnded = true;
-          this.logger.log(`Match ${matchData.matchId} marked as completed: both innings finished`, 'CricketService');
-        }
-        // If one team completed their innings (all out OR max overs) AND enough time has passed, mark as completed
-        // This catches cases where the match ended but API still shows as live
-        else if (bothTeamsBatted && hoursSinceStart > (isT20 ? 3 : isODI ? 8 : 12)) {
-          if (homeAllOut || awayAllOut || homeReachedMax || awayReachedMax) {
-            finalStatus = 'completed';
-            matchEnded = true;
-            this.logger.log(`Match ${matchData.matchId} marked as completed: one innings finished and ${hoursSinceStart.toFixed(1)} hours passed`, 'CricketService');
-          }
-        }
+      }
+      
+      // If API says live, always keep it as live - don't override
+      if (matchData.status === 'live') {
+        finalStatus = 'live';
+        matchEnded = false;
       }
 
       // If match is transitioning to completed, ensure we have all data
@@ -423,11 +415,19 @@ export class CricketService {
       if (finalStatus === 'completed' && !matchToSave.endTime) {
         matchToSave.endTime = new Date();
       }
+      
+      // CRITICAL: If match is live, ensure endTime and result are removed
+      if (finalStatus === 'live') {
+        matchToSave.endTime = undefined;
+        matchToSave.result = undefined;
+        matchToSave.matchEnded = false;
+      }
 
       // Use upsert to update if exists, insert if new
+      // CRITICAL: Use $set to ensure we update existing match, not create duplicate
       await this.cricketMatchModel.findOneAndUpdate(
         { matchId: dataToSave.matchId },
-        matchToSave,
+        { $set: matchToSave },
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
@@ -736,10 +736,14 @@ export class CricketService {
                             transformedFreshMatch.dataSource = 'calculated';
                             this.logger.log(`Calculated result for match ${match.matchId} (API note not available): ${calculatedResult.resultText}`, 'CricketService');
                           }
-                        } else if (transformedFreshMatch.result) {
-                          // Ensure isCompleteData is set when saving from fixtures endpoint
-                          transformedFreshMatch.isCompleteData = true;
-                          transformedFreshMatch.apiFetchedAt = new Date();
+                        }
+                        
+                        // CRITICAL: Always set isCompleteData = true when fetching from fixtures endpoint
+                        // This marks the match as having complete final data from fixtures endpoint
+                        transformedFreshMatch.isCompleteData = true;
+                        transformedFreshMatch.apiFetchedAt = new Date();
+                        
+                        if (transformedFreshMatch.result) {
                           this.logger.log(`Using API result for match ${match.matchId}: ${transformedFreshMatch.result.resultText} (source: ${transformedFreshMatch.result.dataSource || 'api'})`, 'CricketService');
                         }
                         
@@ -1281,31 +1285,99 @@ export class CricketService {
       if (dbMatch) {
         this.logger.log(`Found match ${id} in database (status: ${dbMatch.status})`, 'CricketService');
         
-        // If match is live, try to get fresh data from API and update database
-        if (dbMatch.status === 'live') {
-          try {
-            this.logger.log(`Match ${id} is live, fetching fresh data from API...`, 'CricketService');
-            const apiMatch = await this.sportsMonksService.getMatchDetails(id, 'cricket');
-            if (apiMatch && apiMatch.id) {
-              const transformedMatch = transformSportsMonksMatchToFrontend(apiMatch, 'cricket');
+        // DATA FLOW RULES:
+        // 1. Live matches: Always fetch from API (livescores/fixtures endpoint) for real-time data
+        // 2. Completed matches: Use database data only (don't re-fetch from API)
+        
+        if (dbMatch.status === 'completed' && dbMatch.isCompleteData) {
+          // Match is completed and we have complete data in database
+          // Return database data directly - don't fetch from API
+          this.logger.log(`Match ${id} is completed with complete data - returning from database`, 'CricketService');
+          
+          // Enrich player names for database match
+          const enrichedDbMatch = await this.enrichPlayerNames(dbMatch);
+          return enrichedDbMatch;
+        }
+        
+        // For live matches OR completed matches without complete data, check API
+        try {
+          this.logger.log(`Fetching fresh data from API for match ${id} (status: ${dbMatch.status})...`, 'CricketService');
+          const apiMatch = await this.sportsMonksService.getMatchDetails(id, 'cricket');
+          if (apiMatch && apiMatch.id) {
+            const transformedMatch = transformSportsMonksMatchToFrontend(apiMatch, 'cricket');
+            
+            // Log current batters/bowlers and batting/bowling data for debugging
+            this.logger.log(`Match ${id} transformed - status: ${transformedMatch.status}, currentBatters: ${transformedMatch.currentBatters?.length || 0}, currentBowlers: ${transformedMatch.currentBowlers?.length || 0}`, 'CricketService');
+            
+            // CRITICAL FIX: If API says match is live, remove result even if database has it
+            if (transformedMatch.status === 'live') {
+              this.logger.log(`Match ${id} is LIVE according to API - removing result if present`, 'CricketService');
+              transformedMatch.result = undefined; // Explicitly remove result for live matches
               
-              // Log current batters/bowlers and batting/bowling data for debugging
-              this.logger.log(`Match ${id} transformed - currentBatters: ${transformedMatch.currentBatters?.length || 0}, currentBowlers: ${transformedMatch.currentBowlers?.length || 0}`, 'CricketService');
-              this.logger.log(`Match ${id} transformed - batting: ${transformedMatch.batting?.length || 0}, bowling: ${transformedMatch.bowling?.length || 0}`, 'CricketService');
-              
-              // Enrich player names before returning
-              const enrichedMatch = await this.enrichPlayerNames(transformedMatch);
-              
-              // Update database with fresh data (async, don't wait)
-              this.saveMatchToDatabase(enrichedMatch).catch((error) => {
-                this.logger.error(`Error saving match ${id} to database`, error, 'CricketService');
+              // Update database to reflect live status (async)
+              this.cricketMatchModel.updateOne(
+                { matchId: id },
+                { 
+                  $set: { 
+                    status: 'live',
+                    matchEnded: false,
+                  },
+                  $unset: {
+                    result: '',
+                    endTime: '',
+                  }
+                }
+              ).catch((err) => {
+                this.logger.error(`Error updating match ${id} to live status`, err, 'CricketService');
               });
-              
-              // Return fresh data with enriched player names
-              return enrichedMatch;
+            } else if (transformedMatch.status === 'completed') {
+              // Match is completed - mark as complete data and save to database
+              transformedMatch.isCompleteData = true;
+              this.logger.log(`Match ${id} is COMPLETED according to API - saving to database with complete data`, 'CricketService');
             }
-          } catch (apiError: any) {
-            this.logger.warn(`Could not fetch fresh data for live match ${id}, using database data`, 'CricketService');
+            
+            // Enrich player names before returning
+            const enrichedMatch = await this.enrichPlayerNames(transformedMatch);
+            
+            // Update database with fresh data (async, don't wait)
+            this.saveMatchToDatabase(enrichedMatch).catch((error) => {
+              this.logger.error(`Error saving match ${id} to database`, error, 'CricketService');
+            });
+            
+            // Return fresh data with enriched player names
+            return enrichedMatch;
+          }
+        } catch (apiError: any) {
+          this.logger.warn(`Could not fetch fresh data from API for match ${id}, using database data`, 'CricketService');
+          
+          // If API fails and database says completed, still check if we should remove result
+          // Only return result if match is truly completed (not just marked as such)
+          if (dbMatch.status === 'completed' && dbMatch.result) {
+            // Check scorecard to verify if match is actually completed
+            const currentScore = dbMatch.currentScore;
+            if (currentScore && currentScore.home && currentScore.away) {
+              const matchType = (dbMatch.format || '').toLowerCase();
+              const isT20 = matchType.includes('t20');
+              const isODI = matchType.includes('odi');
+              const maxOvers = isT20 ? 20 : isODI ? 50 : undefined;
+              
+              const homeAllOut = (currentScore.home.wickets || 0) >= 10;
+              const awayAllOut = (currentScore.away.wickets || 0) >= 10;
+              const homeReachedMax = maxOvers !== undefined && (currentScore.home.overs || 0) >= maxOvers;
+              const awayReachedMax = maxOvers !== undefined && (currentScore.away.overs || 0) >= maxOvers;
+              
+              const bothInningsComplete = (homeAllOut && awayAllOut) || 
+                                         (homeReachedMax && awayReachedMax) || 
+                                         (homeAllOut && awayReachedMax) || 
+                                         (awayReachedMax && homeAllOut);
+              
+              // If both innings are NOT complete, match is still live - remove result
+              if (!bothInningsComplete) {
+                this.logger.warn(`Match ${id} marked as completed in DB but scorecard shows it's still live - removing result`, 'CricketService');
+                dbMatch.result = undefined;
+                dbMatch.status = 'live';
+              }
+            }
           }
         }
         
@@ -1323,6 +1395,11 @@ export class CricketService {
             });
             dbMatch.result = calculatedResult;
           }
+        }
+        
+        // CRITICAL: Remove result if match is not truly completed
+        if (dbMatch.status !== 'completed') {
+          dbMatch.result = undefined;
         }
         
         // Enrich player names for database match (especially if it's live and API failed)
