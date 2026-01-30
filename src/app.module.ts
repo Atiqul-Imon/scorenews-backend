@@ -27,6 +27,7 @@ import { CommentsModule } from './modules/comments/comments.module';
 import { MediaModule } from './modules/media/media.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { WebsocketModule } from './websocket/websocket.module';
+import { ScorerModule } from './modules/scorer/scorer.module';
 
 @Module({
   imports: [
@@ -121,6 +122,7 @@ import { WebsocketModule } from './websocket/websocket.module';
     MediaModule,
     AdminModule,
     WebsocketModule,
+    ScorerModule,
   ],
   controllers: [AppController],
   providers: [

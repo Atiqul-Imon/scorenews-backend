@@ -12,13 +12,27 @@ import { Logger } from '@nestjs/common';
 import { CricketService } from '../modules/cricket/cricket.service';
 import { FootballService } from '../modules/football/football.service';
 
+// Helper function to get CORS origins from environment variable
+function getCorsOrigins(): string[] {
+  const corsOrigin = process.env.CORS_ORIGIN || process.env.FRONTEND_URL || 'http://localhost:3000';
+  return corsOrigin.split(',').map((o) => o.trim());
+}
+
 @WebSocketGateway({
-  cors: {
-    origin: '*',
-    credentials: true,
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+  cors: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    const corsOrigins = getCorsOrigins();
+    
+    // Allow requests with no origin (like mobile apps or curl requests)
+    // Allow if origin is in whitelist or if '*' is in whitelist
+    if (!origin || corsOrigins.includes(origin) || corsOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
   },
+  credentials: true,
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   namespace: '/live',
   transports: ['websocket', 'polling'], // Explicitly allow both transports
   allowEIO3: true, // Allow Engine.IO v3 clients

@@ -18,7 +18,7 @@ export class User {
   @Prop({ trim: true })
   avatar?: string;
 
-  @Prop({ enum: ['user', 'admin', 'moderator'], default: 'user', index: true })
+  @Prop({ enum: ['user', 'admin', 'moderator', 'scorer'], default: 'user', index: true })
   role: string;
 
   @Prop({ default: false, index: true })
@@ -75,6 +75,48 @@ export class User {
 
   @Prop({ type: Date })
   lastLogin?: Date;
+
+  @Prop({
+    type: {
+      isScorer: { type: Boolean, default: false },
+      scorerId: { type: String, unique: true, sparse: true },
+      scorerType: {
+        type: String,
+        enum: ['official', 'volunteer', 'community'],
+        default: 'volunteer',
+      },
+      verificationStatus: {
+        type: String,
+        enum: ['pending', 'verified', 'suspended'],
+        default: 'pending',
+      },
+      location: {
+        city: { type: String },
+        district: { type: String },
+        area: { type: String },
+      },
+      matchesScored: { type: Number, default: 0 },
+      accuracyScore: { type: Number, default: 100, min: 0, max: 100 },
+      assignedLeagues: { type: [String], default: [] },
+      phone: { type: String },
+    },
+    required: false,
+  })
+  scorerProfile?: {
+    isScorer: boolean;
+    scorerId?: string;
+    scorerType: string;
+    verificationStatus: string;
+    location?: {
+      city: string;
+      district?: string;
+      area?: string;
+    };
+    matchesScored: number;
+    accuracyScore: number;
+    assignedLeagues: string[];
+    phone?: string;
+  };
 
   // Virtuals
   approvalRate?: number;
