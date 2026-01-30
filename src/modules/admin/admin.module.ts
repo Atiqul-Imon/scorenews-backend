@@ -7,6 +7,7 @@ import { Content, ContentSchema } from '../content/schemas/content.schema';
 import { NewsArticle, NewsArticleSchema } from '../news/schemas/news-article.schema';
 import { Thread, ThreadSchema } from '../threads/schemas/thread.schema';
 import { Comment, CommentSchema } from '../comments/schemas/comment.schema';
+import { CricketMatch, CricketMatchSchema } from '../cricket/schemas/cricket-match.schema';
 import { LoggerModule } from '../../common/logger/logger.module';
 
 @Module({
@@ -17,6 +18,7 @@ import { LoggerModule } from '../../common/logger/logger.module';
       { name: NewsArticle.name, schema: NewsArticleSchema },
       { name: Thread.name, schema: ThreadSchema },
       { name: Comment.name, schema: CommentSchema },
+      { name: CricketMatch.name, schema: CricketMatchSchema },
     ]),
     LoggerModule,
   ],

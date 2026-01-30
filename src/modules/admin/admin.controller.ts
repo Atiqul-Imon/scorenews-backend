@@ -51,4 +51,69 @@ export class AdminController {
   async updateUserRole(@Param('id') userId: string, @Body('role') role: string) {
     return this.adminService.updateUserRole(userId, role);
   }
+
+  // Scorer Management Endpoints
+  @Get('scorers/stats')
+  @ApiOperation({ summary: 'Get scorer statistics and analytics' })
+  @ApiResponse({ status: 200, description: 'Scorer stats retrieved successfully' })
+  async getScorerStats() {
+    return this.adminService.getScorerStats();
+  }
+
+  @Get('scorers')
+  @ApiOperation({ summary: 'Get all scorers with filters' })
+  @ApiResponse({ status: 200, description: 'Scorers retrieved successfully' })
+  async getAllScorers(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 20,
+    @Query('verificationStatus') verificationStatus?: string,
+    @Query('scorerType') scorerType?: string,
+    @Query('city') city?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminService.getAllScorers(page, limit, {
+      verificationStatus,
+      scorerType,
+      city,
+      search,
+    });
+  }
+
+  @Get('scorers/:id')
+  @ApiOperation({ summary: 'Get scorer details by ID' })
+  @ApiResponse({ status: 200, description: 'Scorer details retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Scorer not found' })
+  async getScorerById(@Param('id') scorerId: string) {
+    return this.adminService.getScorerById(scorerId);
+  }
+
+  @Put('scorers/:id/verification')
+  @ApiOperation({ summary: 'Update scorer verification status' })
+  @ApiResponse({ status: 200, description: 'Verification status updated successfully' })
+  @ApiResponse({ status: 404, description: 'Scorer not found' })
+  async updateScorerVerification(
+    @Param('id') scorerId: string,
+    @Body('verificationStatus') verificationStatus: 'verified' | 'pending' | 'suspended',
+  ) {
+    return this.adminService.updateScorerVerification(scorerId, verificationStatus);
+  }
+
+  @Get('scorers/:id/matches')
+  @ApiOperation({ summary: 'Get matches created by a scorer' })
+  @ApiResponse({ status: 200, description: 'Scorer matches retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Scorer not found' })
+  async getScorerMatches(
+    @Param('id') scorerId: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 20,
+    @Query('status') status?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.adminService.getScorerMatches(scorerId, page, limit, {
+      status,
+      startDate,
+      endDate,
+    });
+  }
 }
