@@ -70,13 +70,18 @@ export class LiveMatchService {
       
       for (const apiMatch of apiMatches) {
         try {
-          // Determine status with high confidence
+          // Determine status
           const statusResult = determineMatchStatus(apiMatch);
           
-          // Only process if definitely live
-          if (statusResult.status !== 'live' || statusResult.confidence !== 'high') {
-            this.logger.log(`Skipping match ${apiMatch.id}: ${statusResult.reason}`, 'LiveMatchService');
+          // Process if live (accept medium confidence too, as API can be inconsistent)
+          if (statusResult.status !== 'live') {
+            this.logger.log(`Skipping match ${apiMatch.id}: ${statusResult.reason} (status: ${statusResult.status})`, 'LiveMatchService');
             continue;
+          }
+          
+          // Log confidence level for debugging
+          if (statusResult.confidence !== 'high') {
+            this.logger.log(`Processing match ${apiMatch.id} with ${statusResult.confidence} confidence: ${statusResult.reason}`, 'LiveMatchService');
           }
 
           // Transform to frontend format first

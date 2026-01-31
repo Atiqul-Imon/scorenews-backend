@@ -40,13 +40,29 @@ export class CricketService {
    */
   async getLiveMatches() {
     try {
-      // Fetch and update from API in background
-      this.liveMatchService.fetchAndUpdateLiveMatches().catch((err) => {
-        this.logger.error('Background update of live matches failed', err.stack, 'CricketService');
-      });
+      // First check database
+      let matches = await this.liveMatchService.getLiveMatches();
       
-      // Return from database immediately
-      const matches = await this.liveMatchService.getLiveMatches();
+      // If database is empty, fetch immediately from API (first request after cleanup)
+      if (matches.length === 0) {
+        this.logger.log('Database is empty, fetching live matches from API immediately...', 'CricketService');
+        try {
+          matches = await this.liveMatchService.fetchAndUpdateLiveMatches();
+          this.logger.log(`Fetched ${matches.length} live matches from API`, 'CricketService');
+        } catch (apiError: any) {
+          this.logger.error('Failed to fetch live matches from API', apiError.stack, 'CricketService');
+          // Return empty array if API fails
+          return {
+            success: true,
+            data: [],
+          };
+        }
+      } else {
+        // Database has matches, trigger background update for next request
+        this.liveMatchService.fetchAndUpdateLiveMatches().catch((err) => {
+          this.logger.error('Background update of live matches failed', err.stack, 'CricketService');
+        });
+      }
       
       return {
         success: true,
@@ -54,12 +70,20 @@ export class CricketService {
       };
     } catch (error: any) {
       this.logger.error('Error getting live matches', error.stack, 'CricketService');
-      // Fallback to database only
-      const matches = await this.liveMatchService.getLiveMatches();
-      return {
-        success: true,
-        data: matches,
-      };
+      // Fallback: try to fetch from API
+      try {
+        const matches = await this.liveMatchService.fetchAndUpdateLiveMatches();
+        return {
+          success: true,
+          data: matches,
+        };
+      } catch (fallbackError: any) {
+        this.logger.error('Fallback fetch also failed', fallbackError.stack, 'CricketService');
+        return {
+          success: true,
+          data: [],
+        };
+      }
     }
   }
 
