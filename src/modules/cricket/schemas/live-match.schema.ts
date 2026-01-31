@@ -59,6 +59,13 @@ export class LiveMatch {
   @Prop({ required: true, index: true })
   startTime: Date;
 
+  @Prop({
+    enum: ['live', 'completed', 'upcoming', 'cancelled'],
+    default: 'live',
+    index: true,
+  })
+  status?: 'live' | 'completed' | 'upcoming' | 'cancelled';
+
   // LIVE-SPECIFIC FIELDS
   @Prop({
     type: {
@@ -203,6 +210,70 @@ export class LiveMatch {
     requiredRunRate?: number;
     currentRunRate?: number;
   };
+
+  // Full batting scorecard (all players who have batted)
+  @Prop({
+    type: [
+      {
+        playerId: { type: String },
+        playerName: { type: String, required: true },
+        runs: { type: Number, default: 0 },
+        balls: { type: Number, default: 0 },
+        fours: { type: Number, default: 0 },
+        sixes: { type: Number, default: 0 },
+        strikeRate: { type: Number, default: 0 },
+        isOut: { type: Boolean, default: false },
+        dismissedBy: { type: String },
+        teamId: { type: String },
+        teamName: { type: String, required: true },
+        fowScore: { type: Number },
+        fowBalls: { type: Number },
+      },
+    ],
+  })
+  batting?: Array<{
+    playerId?: string;
+    playerName: string;
+    runs: number;
+    balls: number;
+    fours: number;
+    sixes: number;
+    strikeRate: number;
+    isOut: boolean;
+    dismissedBy?: string;
+    teamId?: string;
+    teamName: string;
+    fowScore?: number;
+    fowBalls?: number;
+  }>;
+
+  // Full bowling scorecard (all bowlers)
+  @Prop({
+    type: [
+      {
+        playerId: { type: String },
+        playerName: { type: String, required: true },
+        overs: { type: Number, default: 0 },
+        maidens: { type: Number, default: 0 },
+        runs: { type: Number, default: 0 },
+        wickets: { type: Number, default: 0 },
+        economy: { type: Number, default: 0 },
+        teamId: { type: String },
+        teamName: { type: String, required: true },
+      },
+    ],
+  })
+  bowling?: Array<{
+    playerId?: string;
+    playerName: string;
+    overs: number;
+    maidens: number;
+    runs: number;
+    wickets: number;
+    economy: number;
+    teamId?: string;
+    teamName: string;
+  }>;
 
   // Match state
   @Prop({ default: false })

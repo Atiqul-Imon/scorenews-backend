@@ -332,7 +332,8 @@ export function transformApiMatchToFrontend(apiMatch: any): any {
 
 export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'cricket' | 'football' = 'cricket'): any {
   // Handle v2.0 API format (cricket) vs v3 API format (football)
-  const isV2Format = sport === 'cricket' && (apiMatch.localteam || apiMatch.visitorteam);
+  // v2.0 format is identified by presence of localteam_id/visitorteam_id (even if nested objects aren't included)
+  const isV2Format = sport === 'cricket' && (apiMatch.localteam_id !== undefined || apiMatch.visitorteam_id !== undefined);
   
   let homeParticipant: any = {};
   let awayParticipant: any = {};
@@ -340,8 +341,10 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
   
   if (isV2Format) {
     // v2.0 format: localteam, visitorteam, scoreboards
-    homeParticipant = apiMatch.localteam || {};
-    awayParticipant = apiMatch.visitorteam || {};
+    // NOTE: These may not be included in response even with include parameter
+    // If not included, we'll use IDs and fetch separately or construct from IDs
+    homeParticipant = apiMatch.localteam || { id: apiMatch.localteam_id };
+    awayParticipant = apiMatch.visitorteam || { id: apiMatch.visitorteam_id };
     scores = apiMatch.scoreboards || [];
   } else {
     // v3 format: participants, scores
@@ -671,18 +674,25 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
   
   if (isV2Format) {
     // v2.0: teams are objects with name, code properties
-    homeTeamName = typeof apiMatch.localteam === 'string' 
-      ? apiMatch.localteam 
-      : (apiMatch.localteam?.name || 'Team 1');
-    awayTeamName = typeof apiMatch.visitorteam === 'string' 
-      ? apiMatch.visitorteam 
-      : (apiMatch.visitorteam?.name || 'Team 2');
-    homeTeamShortName = typeof apiMatch.localteam === 'object' && apiMatch.localteam?.code
-      ? apiMatch.localteam.code
-      : homeTeamName.substring(0, 3).toUpperCase();
-    awayTeamShortName = typeof apiMatch.visitorteam === 'object' && apiMatch.visitorteam?.code
-      ? apiMatch.visitorteam.code
-      : awayTeamName.substring(0, 3).toUpperCase();
+    // BUT: If include parameter doesn't return nested data, we only have IDs
+    // In that case, we need to construct team names from IDs or use fallback
+    if (apiMatch.localteam && typeof apiMatch.localteam === 'object' && apiMatch.localteam.name) {
+      homeTeamName = apiMatch.localteam.name;
+      homeTeamShortName = apiMatch.localteam.code || apiMatch.localteam.short_name || homeTeamName.substring(0, 3).toUpperCase();
+    } else {
+      // Nested data not included - use fallback names (will be updated when full details fetched)
+      homeTeamName = `Team ${apiMatch.localteam_id || '1'}`;
+      homeTeamShortName = `T${apiMatch.localteam_id || '1'}`;
+    }
+    
+    if (apiMatch.visitorteam && typeof apiMatch.visitorteam === 'object' && apiMatch.visitorteam.name) {
+      awayTeamName = apiMatch.visitorteam.name;
+      awayTeamShortName = apiMatch.visitorteam.code || apiMatch.visitorteam.short_name || awayTeamName.substring(0, 3).toUpperCase();
+    } else {
+      // Nested data not included - use fallback names (will be updated when full details fetched)
+      awayTeamName = `Team ${apiMatch.visitorteam_id || '2'}`;
+      awayTeamShortName = `T${apiMatch.visitorteam_id || '2'}`;
+    }
   } else {
     // v3: teams from participants
     homeTeamName = homeParticipant.name || 'Team 1';
@@ -1012,10 +1022,31 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     }
   }
 
+  // Ensure matchId is always present
+  if (!apiMatch.id) {
+    console.error('[Transformer] ERROR: apiMatch.id is missing!', {
+      apiMatch: {
+        name: apiMatch.name,
+        localteam_id: apiMatch.localteam_id,
+        visitorteam_id: apiMatch.visitorteam_id,
+        state_id: apiMatch.state_id,
+        hasLocalteam: !!apiMatch.localteam,
+        hasVisitorteam: !!apiMatch.visitorteam,
+      }
+    });
+    return null; // Return null if no ID
+  }
+
+  // Build match name - handle missing name field
+  let matchName = apiMatch.name;
+  if (!matchName) {
+    matchName = `${teams.home.name} vs ${teams.away.name}`;
+  }
+
   return {
-    _id: apiMatch.id?.toString(),
-    matchId: apiMatch.id?.toString(),
-    name: apiMatch.name || `${teams.home.name} vs ${teams.away.name}`,
+    _id: apiMatch.id.toString(),
+    matchId: apiMatch.id.toString(),
+    name: matchName,
     teams,
     venue: venueData,
     status,
