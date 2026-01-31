@@ -93,7 +93,7 @@ export class LiveMatch {
     type: [
       {
         playerId: { type: String },
-        playerName: { type: String, required: true },
+        playerName: { type: String }, // Make optional - filter out records without names instead of failing validation
         runs: { type: Number, default: 0 },
         balls: { type: Number, default: 0 },
         fours: { type: Number, default: 0 },
@@ -106,7 +106,7 @@ export class LiveMatch {
   })
   currentBatters?: Array<{
     playerId?: string;
-    playerName: string;
+    playerName?: string; // Optional - only include records with player names
     runs: number;
     balls: number;
     fours: number;
@@ -120,7 +120,7 @@ export class LiveMatch {
     type: [
       {
         playerId: { type: String },
-        playerName: { type: String, required: true },
+        playerName: { type: String }, // Make optional - filter out records without names instead of failing validation
         overs: { type: Number, default: 0 },
         maidens: { type: Number, default: 0 },
         runs: { type: Number, default: 0 },
@@ -133,7 +133,7 @@ export class LiveMatch {
   })
   currentBowlers?: Array<{
     playerId?: string;
-    playerName: string;
+    playerName?: string; // Optional - only include records with player names
     overs: number;
     maidens: number;
     runs: number;
@@ -159,7 +159,7 @@ export class LiveMatch {
   @Prop({
     type: {
       playerId: { type: String },
-      playerName: { type: String, required: true },
+      playerName: { type: String }, // Make optional - only set if API provides it
       runs: { type: Number, default: 0 },
       balls: { type: Number, default: 0 },
       fowScore: { type: Number },
@@ -168,7 +168,7 @@ export class LiveMatch {
   })
   lastWicket?: {
     playerId?: string;
-    playerName: string;
+    playerName?: string; // Optional - only set if API provides it
     runs: number;
     balls: number;
     fowScore?: number;
@@ -203,12 +203,18 @@ export class LiveMatch {
       currentOver: { type: Number },
       requiredRunRate: { type: Number },
       currentRunRate: { type: Number },
+      runsRemaining: { type: Number },
+      ballsRemaining: { type: Number },
+      oversRemaining: { type: Number },
     },
   })
   liveData?: {
-    currentOver: number;
+    currentOver?: number;
     requiredRunRate?: number;
     currentRunRate?: number;
+    runsRemaining?: number;
+    ballsRemaining?: number;
+    oversRemaining?: number;
   };
 
   // Full batting scorecard (all players who have batted)
@@ -216,7 +222,7 @@ export class LiveMatch {
     type: [
       {
         playerId: { type: String },
-        playerName: { type: String, required: true },
+        playerName: { type: String }, // Make optional - filter out records without names instead of failing validation
         runs: { type: Number, default: 0 },
         balls: { type: Number, default: 0 },
         fours: { type: Number, default: 0 },
@@ -233,7 +239,7 @@ export class LiveMatch {
   })
   batting?: Array<{
     playerId?: string;
-    playerName: string;
+    playerName?: string; // Optional - only include records with player names
     runs: number;
     balls: number;
     fours: number;
@@ -252,7 +258,7 @@ export class LiveMatch {
     type: [
       {
         playerId: { type: String },
-        playerName: { type: String, required: true },
+        playerName: { type: String }, // Make optional - filter out records without names instead of failing validation
         overs: { type: Number, default: 0 },
         maidens: { type: Number, default: 0 },
         runs: { type: Number, default: 0 },
@@ -265,7 +271,7 @@ export class LiveMatch {
   })
   bowling?: Array<{
     playerId?: string;
-    playerName: string;
+    playerName?: string; // Optional - only include records with player names
     overs: number;
     maidens: number;
     runs: number;
@@ -278,6 +284,79 @@ export class LiveMatch {
   // Match state
   @Prop({ default: false })
   matchStarted: boolean;
+
+  // Additional API fields - Store ALL available data from API
+  @Prop()
+  refereeId?: string;
+
+  @Prop()
+  firstUmpireId?: string;
+
+  @Prop()
+  secondUmpireId?: string;
+
+  @Prop()
+  tvUmpireId?: string;
+
+  @Prop()
+  leagueId?: string;
+
+  @Prop()
+  leagueName?: string;
+
+  @Prop()
+  seasonId?: string;
+
+  @Prop()
+  seasonName?: string;
+
+  @Prop()
+  stageId?: string;
+
+  @Prop()
+  stageName?: string;
+
+  @Prop()
+  roundName?: string;
+
+  @Prop()
+  type?: string;
+
+  @Prop()
+  matchType?: string;
+
+  @Prop()
+  stateId?: number;
+
+  @Prop()
+  live?: boolean;
+
+  @Prop()
+  venueId?: string;
+
+  @Prop()
+  venueCapacity?: number;
+
+  @Prop()
+  venueImagePath?: string;
+
+  @Prop()
+  homeTeamId?: string;
+
+  @Prop()
+  awayTeamId?: string;
+
+  @Prop()
+  homeTeamCode?: string;
+
+  @Prop()
+  awayTeamCode?: string;
+
+  @Prop()
+  homeTeamImagePath?: string;
+
+  @Prop()
+  awayTeamImagePath?: string;
 
   @Prop()
   tossWon?: string;

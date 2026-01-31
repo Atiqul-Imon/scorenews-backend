@@ -46,6 +46,9 @@ export function determineMatchStatus(apiMatch: any): StatusDeterminationResult {
       };
     }
     if (stateId === 1 || stateId === 2) {
+      // NOTE: state_id 1 or 2 means "not started" or "starting soon"
+      // However, if a match is in the /livescores endpoint, it might be starting imminently
+      // The caller (live-match.service) will handle this case specially
       return {
         status: 'upcoming',
         confidence: 'high',

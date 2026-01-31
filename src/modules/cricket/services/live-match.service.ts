@@ -94,12 +94,44 @@ export class LiveMatchService {
             // Continue with livescores data - transformer will handle it
           }
           
-          // Determine status
+          // CRITICAL: Matches from /livescores endpoint should be considered LIVE by default
+          // Only exclude if they are explicitly marked as completed
+          // The status determiner might classify some live matches as "upcoming" if state_id is 1 or 2,
+          // but if they're in the livescores endpoint, they're likely live or about to start
           const statusResult = determineMatchStatus(matchData);
           
-          // Process if live (accept medium confidence too, as API can be inconsistent)
-          if (statusResult.status !== 'live') {
+          // If status determiner says completed, trust it and skip
+          if (statusResult.status === 'completed') {
             this.logger.log(`Skipping match ${matchData.id}: ${statusResult.reason} (status: ${statusResult.status})`, 'LiveMatchService');
+            continue;
+          }
+          
+          // If status determiner says live, process it
+          if (statusResult.status === 'live') {
+            // Process as live match - continue to transformation
+            this.logger.log(`Match ${matchData.id} determined as live: ${statusResult.reason}`, 'LiveMatchService');
+          } else if (statusResult.status === 'upcoming') {
+            // Even if status determiner says "upcoming", if match is in livescores endpoint,
+            // it might be starting soon or already started but not yet detected
+            // Check if match has started (startTime is in the past) and has score data
+            const hasStarted = matchData.starting_at && new Date(matchData.starting_at) <= new Date();
+            const hasScoreData = matchData.scoreboards?.length > 0 || 
+                                (matchData.localteam && matchData.visitorteam);
+            
+            if (!hasStarted) {
+              // Match hasn't started yet - skip it (it's truly upcoming)
+              this.logger.log(`Skipping match ${matchData.id}: ${statusResult.reason} (status: ${statusResult.status}, not started yet)`, 'LiveMatchService');
+              continue;
+            } else if (hasStarted && hasScoreData) {
+              // Match has started and has score data - treat as live
+              this.logger.log(`Match ${matchData.id} from livescores has started with score data, treating as live (was: ${statusResult.status})`, 'LiveMatchService');
+            } else {
+              // Match has started but no score data yet - treat as live (might be just starting)
+              this.logger.log(`Match ${matchData.id} from livescores has started but no score data yet, treating as live (was: ${statusResult.status})`, 'LiveMatchService');
+            }
+          } else {
+            // Unknown status - skip to be safe
+            this.logger.warn(`Skipping match ${matchData.id}: Unknown status from determiner: ${statusResult.status}`, 'LiveMatchService');
             continue;
           }
           
@@ -139,7 +171,28 @@ export class LiveMatchService {
           this.logger.log(`Successfully transformed match ${matchData.id} -> ${transformed.matchId}`, 'LiveMatchService');
           this.logger.log(`Transformed match details: name=${transformed.name}, status=${transformed.status}, format=${transformed.format}`, 'LiveMatchService');
           
-          // Convert to LiveMatch format
+          // Enrich player names if they're missing (fetch from API separately)
+          // This is needed because the API might not include player objects in batting/bowling data
+          const hasBatting = transformed.batting && Array.isArray(transformed.batting) && transformed.batting.length > 0;
+          const hasBowling = transformed.bowling && Array.isArray(transformed.bowling) && transformed.bowling.length > 0;
+          const hasCurrentBatters = transformed.currentBatters && Array.isArray(transformed.currentBatters) && transformed.currentBatters.length > 0;
+          const hasCurrentBowlers = transformed.currentBowlers && Array.isArray(transformed.currentBowlers) && transformed.currentBowlers.length > 0;
+          
+          this.logger.log(`[Match ${transformed.matchId}] Before enrichment: batting=${hasBatting ? transformed.batting.length : 0}, bowling=${hasBowling ? transformed.bowling.length : 0}, currentBatters=${hasCurrentBatters ? transformed.currentBatters.length : 0}, currentBowlers=${hasCurrentBowlers ? transformed.currentBowlers.length : 0}`, 'LiveMatchService');
+          
+          if (hasBatting || hasBowling || hasCurrentBatters || hasCurrentBowlers) {
+            try {
+              await this.enrichPlayerNames(transformed);
+              this.logger.log(`[Match ${transformed.matchId}] Enriched player names successfully`, 'LiveMatchService');
+            } catch (enrichError: any) {
+              this.logger.warn(`[Match ${transformed.matchId}] Failed to enrich player names: ${enrichError.message}`, 'LiveMatchService');
+              // Continue without enrichment - records without names will be filtered out
+            }
+          } else {
+            this.logger.warn(`[Match ${transformed.matchId}] No batting/bowling data to enrich - API did not return batting/bowling arrays`, 'LiveMatchService');
+          }
+          
+          // Convert to LiveMatch format - Include ALL available fields from API
           const liveMatch: LiveMatch = {
             matchId: transformed.matchId,
             series: transformed.series,
@@ -164,13 +217,47 @@ export class LiveMatchService {
             target: transformed.target,
             round: transformed.round,
             // Include full batting and bowling scorecards
-            batting: transformed.batting,
-            bowling: transformed.bowling,
+            batting: transformed.batting && Array.isArray(transformed.batting) && transformed.batting.length > 0 ? transformed.batting : undefined,
+            bowling: transformed.bowling && Array.isArray(transformed.bowling) && transformed.bowling.length > 0 ? transformed.bowling : undefined,
+            // Include ALL additional API fields
+            refereeId: transformed.refereeId,
+            firstUmpireId: transformed.firstUmpireId,
+            secondUmpireId: transformed.secondUmpireId,
+            tvUmpireId: transformed.tvUmpireId,
+            leagueId: transformed.leagueId,
+            leagueName: transformed.leagueName,
+            seasonId: transformed.seasonId,
+            seasonName: transformed.seasonName,
+            stageId: transformed.stageId,
+            stageName: transformed.stageName,
+            roundName: transformed.roundName,
+            type: transformed.type,
+            matchType: transformed.matchType,
+            stateId: transformed.stateId,
+            live: transformed.live,
+            venueId: transformed.venueId,
+            venueCapacity: transformed.venueCapacity,
+            venueImagePath: transformed.venueImagePath,
+            homeTeamId: transformed.homeTeamId,
+            awayTeamId: transformed.awayTeamId,
+            homeTeamCode: transformed.homeTeamCode,
+            awayTeamCode: transformed.awayTeamCode,
+            homeTeamImagePath: transformed.homeTeamImagePath,
+            awayTeamImagePath: transformed.awayTeamImagePath,
             lastUpdatedAt: new Date(),
             updateCount: 0, // Required by schema, but will be excluded from $set to avoid conflict with $inc
             expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
           };
 
+          // Log what we're about to save - including current batters/bowlers details
+          this.logger.log(`[Match ${liveMatch.matchId}] About to save: batting=${liveMatch.batting?.length || 0}, bowling=${liveMatch.bowling?.length || 0}, currentBatters=${liveMatch.currentBatters?.length || 0}, currentBowlers=${liveMatch.currentBowlers?.length || 0}`, 'LiveMatchService');
+          if (liveMatch.currentBatters && liveMatch.currentBatters.length > 0) {
+            this.logger.log(`[Match ${liveMatch.matchId}] Current batters: ${liveMatch.currentBatters.map(b => `${b.playerName || 'Unknown'} (${b.runs || 0}*${b.balls || 0})`).join(', ')}`, 'LiveMatchService');
+          }
+          if (liveMatch.currentBowlers && liveMatch.currentBowlers.length > 0) {
+            this.logger.log(`[Match ${liveMatch.matchId}] Current bowlers: ${liveMatch.currentBowlers.map(b => `${b.playerName || 'Unknown'} (${b.overs || 0}-${b.maidens || 0}-${b.runs || 0}-${b.wickets || 0})`).join(', ')}`, 'LiveMatchService');
+          }
+          
           // Save or update in database
           await this.saveOrUpdateLiveMatch(liveMatch);
           liveMatches.push(liveMatch);
@@ -188,6 +275,168 @@ export class LiveMatchService {
       return liveMatches;
     } catch (error: any) {
       this.logger.error('Error fetching and updating live matches', error.stack, 'LiveMatchService');
+      throw error;
+    }
+  }
+
+  /**
+   * Enrich player names by fetching player details from API
+   */
+  private async enrichPlayerNames(transformed: any): Promise<void> {
+    try {
+      // Collect all unique player IDs that need names
+      const playerIds = new Set<string>();
+      
+      // Collect from batting
+      if (transformed.batting && Array.isArray(transformed.batting)) {
+        transformed.batting.forEach((b: any) => {
+          if (b.playerId && !b.playerName) {
+            playerIds.add(b.playerId);
+          }
+        });
+      }
+      
+      // Collect from bowling
+      if (transformed.bowling && Array.isArray(transformed.bowling)) {
+        transformed.bowling.forEach((b: any) => {
+          if (b.playerId && !b.playerName) {
+            playerIds.add(b.playerId);
+          }
+        });
+      }
+      
+      // Collect from currentBatters
+      if (transformed.currentBatters && Array.isArray(transformed.currentBatters)) {
+        transformed.currentBatters.forEach((b: any) => {
+          if (b.playerId && !b.playerName) {
+            playerIds.add(b.playerId);
+          }
+        });
+      }
+      
+      // Collect from currentBowlers
+      if (transformed.currentBowlers && Array.isArray(transformed.currentBowlers)) {
+        transformed.currentBowlers.forEach((b: any) => {
+          if (b.playerId && !b.playerName) {
+            playerIds.add(b.playerId);
+          }
+        });
+      }
+      
+      // Collect from lastWicket
+      if (transformed.lastWicket && transformed.lastWicket.playerId && !transformed.lastWicket.playerName) {
+        playerIds.add(transformed.lastWicket.playerId);
+      }
+      
+      if (playerIds.size === 0) {
+        return; // No player IDs to fetch
+      }
+      
+      this.logger.log(`Enriching ${playerIds.size} player names for match ${transformed.matchId}`, 'LiveMatchService');
+      
+      // Fetch player names in parallel (with rate limiting to avoid API throttling)
+      const playerPromises = Array.from(playerIds).map(async (playerId) => {
+        try {
+          const player = await this.sportsMonksService.getPlayerDetails(playerId);
+          if (player) {
+            const playerName = player.fullname || player.full_name || player.name || 
+                              (player.firstname && player.lastname ? `${player.firstname} ${player.lastname}` : player.firstname || player.first_name);
+            return { playerId, playerName: playerName || undefined };
+          }
+          return { playerId, playerName: undefined };
+        } catch (error: any) {
+          this.logger.warn(`Failed to fetch player ${playerId}: ${error.message}`, 'LiveMatchService');
+          return { playerId, playerName: undefined };
+        }
+      });
+      
+      const playerData = await Promise.all(playerPromises);
+      const playerMap = new Map<string, string>();
+      
+      playerData.forEach(({ playerId, playerName }) => {
+        if (playerName) {
+          playerMap.set(playerId, playerName);
+        }
+      });
+      
+      // Update batting records
+      if (transformed.batting && Array.isArray(transformed.batting)) {
+        transformed.batting.forEach((b: any) => {
+          if (b.playerId && !b.playerName && playerMap.has(b.playerId)) {
+            b.playerName = playerMap.get(b.playerId);
+          }
+        });
+      }
+      
+      // Update bowling records
+      if (transformed.bowling && Array.isArray(transformed.bowling)) {
+        transformed.bowling.forEach((b: any) => {
+          if (b.playerId && !b.playerName && playerMap.has(b.playerId)) {
+            b.playerName = playerMap.get(b.playerId);
+          }
+        });
+      }
+      
+      // Update currentBatters
+      if (transformed.currentBatters && Array.isArray(transformed.currentBatters)) {
+        transformed.currentBatters.forEach((b: any) => {
+          if (b.playerId && !b.playerName && playerMap.has(b.playerId)) {
+            b.playerName = playerMap.get(b.playerId);
+          }
+        });
+      }
+      
+      // Update currentBowlers
+      if (transformed.currentBowlers && Array.isArray(transformed.currentBowlers)) {
+        transformed.currentBowlers.forEach((b: any) => {
+          if (b.playerId && !b.playerName && playerMap.has(b.playerId)) {
+            b.playerName = playerMap.get(b.playerId);
+          }
+        });
+      }
+      
+      // Update lastWicket
+      if (transformed.lastWicket && transformed.lastWicket.playerId && !transformed.lastWicket.playerName) {
+        const playerName = playerMap.get(transformed.lastWicket.playerId);
+        if (playerName) {
+          transformed.lastWicket.playerName = playerName;
+        }
+      }
+      
+      this.logger.log(`Successfully enriched ${playerMap.size} player names out of ${playerIds.size} requested`, 'LiveMatchService');
+      
+      // CRITICAL: Filter out records without player names AFTER enrichment (no placeholders)
+      // This ensures we only save records with valid player names from the API
+      
+      // Filter batting
+      if (transformed.batting && Array.isArray(transformed.batting)) {
+        transformed.batting = transformed.batting.filter((b: any) => b.playerName !== undefined && b.playerName !== null);
+      }
+      
+      // Filter bowling
+      if (transformed.bowling && Array.isArray(transformed.bowling)) {
+        transformed.bowling = transformed.bowling.filter((b: any) => b.playerName !== undefined && b.playerName !== null);
+      }
+      
+      // CRITICAL: Don't filter out currentBatters/currentBowlers even if names aren't available
+      // Keep them with player IDs - the frontend can handle missing names
+      // Only filter if both playerId and playerName are missing (shouldn't happen, but safety check)
+      if (transformed.currentBatters && Array.isArray(transformed.currentBatters)) {
+        transformed.currentBatters = transformed.currentBatters.filter((b: any) => b.playerId !== undefined && b.playerId !== null);
+      }
+      
+      if (transformed.currentBowlers && Array.isArray(transformed.currentBowlers)) {
+        transformed.currentBowlers = transformed.currentBowlers.filter((b: any) => b.playerId !== undefined && b.playerId !== null);
+      }
+      
+      // Filter lastWicket (set to undefined if no name)
+      if (transformed.lastWicket && !transformed.lastWicket.playerName) {
+        transformed.lastWicket = undefined;
+      }
+      
+      this.logger.log(`After filtering: batting=${transformed.batting?.length || 0}, bowling=${transformed.bowling?.length || 0}, currentBatters=${transformed.currentBatters?.length || 0}, currentBowlers=${transformed.currentBowlers?.length || 0}`, 'LiveMatchService');
+    } catch (error: any) {
+      this.logger.error(`Error enriching player names: ${error.message}`, error.stack, 'LiveMatchService');
       throw error;
     }
   }
@@ -264,9 +513,9 @@ export class LiveMatchService {
 
       const finalUpdateCount = result?.updateCount || 0;
       if (finalUpdateCount > 0) {
-        this.logger.log(`Updated live match ${match.matchId} (update #${finalUpdateCount})`, 'LiveMatchService');
+        this.logger.log(`Updated live match ${match.matchId} (update #${finalUpdateCount}) - currentBatters: ${result?.currentBatters?.length || 0}, currentBowlers: ${result?.currentBowlers?.length || 0}`, 'LiveMatchService');
       } else {
-        this.logger.log(`Created new live match ${match.matchId}`, 'LiveMatchService');
+        this.logger.log(`Created new live match ${match.matchId} - currentBatters: ${result?.currentBatters?.length || 0}, currentBowlers: ${result?.currentBowlers?.length || 0}`, 'LiveMatchService');
       }
       
       return result as LiveMatch;

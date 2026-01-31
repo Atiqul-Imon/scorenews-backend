@@ -5,7 +5,7 @@ import { LiveMatchService } from './live-match.service';
 import { CompletedMatchService } from './completed-match.service';
 import { SportsMonksService } from './sportsmonks.service';
 import { transformSportsMonksMatchToFrontend } from '../utils/match-transformers';
-import { parseApiResultNote, calculateMatchResult } from '../utils/match-transformers';
+import { parseApiResultNote } from '../utils/match-transformers';
 import { determineMatchStatus, isCompleted } from '../utils/status-determiner';
 import { isValidMatchId, sanitizeMatchId } from '../utils/validation';
 import { WinstonLoggerService } from '../../../common/logger/winston-logger.service';
@@ -134,8 +134,11 @@ export class MatchTransitionService {
         return;
       }
 
-      // 5. Parse result
+      // 5. Parse result from API only (never calculate locally)
+      // Result must come from API: either from transformed.result or from parsing API note field
       let result = transformed.result;
+      
+      // If not in transformed result, try parsing from API note field (this is still API data)
       if (!result && apiMatch.note && apiMatch.winner_team_id) {
         result = parseApiResultNote(
           apiMatch.note,
@@ -144,29 +147,26 @@ export class MatchTransitionService {
           apiMatch.visitorteam_id,
           transformed.teams
         );
-      }
-
-      // Calculate result if still not available
-      if (!result && transformed.currentScore) {
-        result = calculateMatchResult(
-          transformed.currentScore,
-          transformed.innings || [],
-          transformed.teams,
-          apiMatch.localteam_id,
-          apiMatch.visitorteam_id,
-          true, // isV2Format
-          apiMatch.winner_team_id
-        );
         if (result) {
-          result.dataSource = 'calculated';
+          result.dataSource = 'api'; // Parsed from API note, so it's from API
         }
       }
 
+      // CRITICAL: Never calculate result locally - only use API-provided data
+      // If API doesn't provide result, we cannot complete the migration
       if (!result) {
-        this.logger.error(`Could not determine result for match ${matchId}`, '', 'MatchTransitionService');
+        this.logger.error(
+          `Cannot migrate match ${matchId}: API did not provide result. ` +
+          `Required fields: winner_team_id=${apiMatch.winner_team_id}, note="${apiMatch.note?.substring(0, 100)}"`,
+          '',
+          'MatchTransitionService'
+        );
         await session.abortTransaction();
         return;
       }
+      
+      // Ensure result is marked as from API (never calculated)
+      result.dataSource = 'api';
 
       // Validate result structure
       if (!result.winner || !result.winnerName || result.margin === undefined) {
@@ -219,7 +219,7 @@ export class MatchTransitionService {
           margin: result.margin,
           marginType: result.marginType,
           resultText: result.resultText,
-          dataSource: result.dataSource || 'api',
+          dataSource: 'api', // Always from API, never calculated
         },
         innings: transformed.innings,
         batting: transformed.batting,
@@ -235,7 +235,7 @@ export class MatchTransitionService {
         superOver: apiMatch.super_over || false,
         followOn: apiMatch.follow_on || false,
         drawNoResult: apiMatch.draw_noresult || false,
-        dataSource: result.dataSource || 'api',
+        dataSource: 'api', // Always from API, never calculated
         apiFetchedAt: new Date(),
         isCompleteData: true,
       };
