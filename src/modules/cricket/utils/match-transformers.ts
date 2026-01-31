@@ -1174,6 +1174,17 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       const isFirstInnings = matchStatus.includes('1st Innings') || matchStatus === '1st Innings';
       const isSecondInnings = matchStatus.includes('2nd Innings') || matchStatus === '2nd Innings';
       
+      // CRITICAL: If status indicates "Innings Break", there are NO current batters
+      // The innings is complete, so we should not show any current batters
+      const isInningsBreak = matchStatus.toLowerCase().includes('innings break') || 
+                             matchStatus.toLowerCase().includes('break') ||
+                             matchStatus === 'Innings Break';
+      
+      if (isInningsBreak) {
+        console.log('[Transformer] Match is in Innings Break - no current batters');
+        return undefined;
+      }
+      
       // Determine which team is currently batting based on API status
       // For "1st Innings": usually the team that won the toss (or localteam)
       // For "2nd Innings": the other team
@@ -1210,42 +1221,54 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       console.log('[Transformer] API status:', matchStatus, 'Current batting team_id:', currentBattingTeamId, 'Current innings scoreboard:', currentScoreboardId, 'overs:', currentInningsScoreboard?.overs, 'updated_at:', currentInningsScoreboard?.updated_at);
       
       // Filter for current batters - ONLY from current innings AND actually active
-      // CRITICAL: Only include batters who are:
-      // 1. From the current innings (scoreboard matches)
-      // 2. Active (active === true) OR not out and have recent activity
+      // CRITICAL: Only include batters who are ACTUALLY currently batting
+      // The API's `active` field is the most reliable indicator - if active=false, they're NOT currently batting
       const currentBatsmen = battingData
         .filter((b: any) => {
           // Only include batters from current innings
           const isFromCurrentInnings = !currentScoreboardId || b.scoreboard === currentScoreboardId;
           
-          // CRITICAL: Only include batters who are ACTUALLY currently batting
-          // The API may not always set active=true, so we need to check multiple conditions:
-          // 1. Must be from current innings (scoreboard matches)
-          // 2. Must not be out (batsmanout_id is null/undefined)
-          // 3. Must have recent activity (score > 0 or ball > 0) OR active=true
-          // 4. Must be from the team that's currently batting (check team_id matches current innings team)
-          const isNotOut = !b.batsmanout_id || b.batsmanout_id === null;
-          const hasActivity = (b.score > 0 || b.ball > 0);
-          const isActive = b.active === true;
-          
           // Get the team_id of the current innings
           const currentInningsTeamId = currentInningsScoreboard?.team_id;
           const isFromCurrentTeam = !currentInningsTeamId || b.team_id === currentInningsTeamId;
           
-          // For current batters: must be from current innings, current team, not out, and have activity
-          // Prioritize active=true, but also include not-out batters with activity from current innings
-          const result = isFromCurrentInnings && isFromCurrentTeam && isNotOut && (isActive || hasActivity);
+          // CRITICAL: Check if batter is out using ALL possible indicators
+          // API may indicate dismissal through multiple fields:
+          // 1. batsmanout_id - primary indicator (if set and not null/0, player is out)
+          // 2. catch_stump_player_id - indicates caught or stumped
+          // 3. runout_by_id - indicates run out
+          // Player is OUT if ANY of these fields indicate dismissal
+          const hasBatsmanoutId = b.batsmanout_id !== undefined && b.batsmanout_id !== null && b.batsmanout_id !== 0;
+          const hasCatchStump = b.catch_stump_player_id !== undefined && b.catch_stump_player_id !== null && b.catch_stump_player_id !== 0;
+          const hasRunout = b.runout_by_id !== undefined && b.runout_by_id !== null && b.runout_by_id !== 0;
+          const isOut = hasBatsmanoutId || hasCatchStump || hasRunout;
+          
+          // CRITICAL: Only include batters who are:
+          // 1. From current innings (scoreboard matches)
+          // 2. From current team
+          // 3. NOT out (checked using all dismissal indicators)
+          // 4. ACTIVE (active === true) - this is the most reliable indicator of current batters
+          //    If API doesn't set active=true, they're NOT currently batting
+          const isActive = b.active === true;
+          
+          const result = isFromCurrentInnings && isFromCurrentTeam && !isOut && isActive;
           
           if (result) {
-            console.log('[Transformer] Found current batter:', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'score:', b.score, 'ball:', b.ball, 'batsmanout_id:', b.batsmanout_id);
+            console.log('[Transformer] Found current batter:', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'score:', b.score, 'ball:', b.ball, 'isOut:', isOut);
+          } else if (isFromCurrentInnings && isFromCurrentTeam && !isOut) {
+            // Log why batter was excluded (for debugging)
+            console.log('[Transformer] Excluded batter (not active):', b.player_id, 'active:', b.active, 'score:', b.score, 'ball:', b.ball);
           }
           return result;
         })
         .sort((a: any, b: any) => {
-          // Sort by active first (active batters come first), then by runs
+          // Sort by most recent activity - check if there's a timestamp or order field
+          // If not available, sort by runs (higher runs = likely more recent)
+          // But prioritize active=true batters
           if (a.active && !b.active) return -1;
           if (!a.active && b.active) return 1;
-          return (b.score || 0) - (a.score || 0);
+          // If both active, sort by balls (more balls = likely more recent)
+          return (b.ball || 0) - (a.ball || 0);
         })
         .slice(0, 2); // Get top 2 current batters
       
@@ -1367,39 +1390,39 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       console.log('[Transformer] API status:', matchStatus, 'Current batting team_id:', currentBattingTeamId, 'Current innings scoreboard for bowling:', currentScoreboardId, 'overs:', currentInningsScoreboard?.overs, 'updated_at:', currentInningsScoreboard?.updated_at);
       
       // Filter for current bowlers - ONLY from current innings AND actually active
-      // CRITICAL: Only include bowlers who are:
-      // 1. From the current innings (scoreboard matches)
-      // 2. Active (active === true) OR have bowled recently in current innings
+      // CRITICAL: Only include bowlers who are ACTUALLY currently bowling
+      // The API's `active` field is the most reliable indicator - if active=false, they're NOT currently bowling
       const currentBowlers = bowlingData
         .filter((b: any) => {
           // Only include bowlers from current innings
           const isFromCurrentInnings = !currentScoreboardId || b.scoreboard === currentScoreboardId;
-          
-          // CRITICAL: Only include bowlers who are ACTUALLY currently bowling
-          // The API may not always set active=true, so we need to check multiple conditions:
-          // 1. Must be from current innings (scoreboard matches)
-          // 2. Must have bowled (overs > 0)
-          // 3. Must be from the team that's currently bowling (check team_id matches opposite of current innings team)
-          const isActive = b.active === true;
-          const hasOvers = b.overs > 0;
           
           // Get the team_id of the current innings (batting team)
           // The bowling team is the opposite team
           const currentInningsTeamId = currentInningsScoreboard?.team_id;
           const isFromBowlingTeam = !currentInningsTeamId || b.team_id !== currentInningsTeamId;
           
-          // For current bowlers: must be from current innings, bowling team, and have overs
-          // CRITICAL: Only include if active=true OR (has overs AND from current innings)
-          // Don't include inactive bowlers from previous innings
-          const result = isFromCurrentInnings && isFromBowlingTeam && hasOvers && (isActive || (hasOvers && isFromCurrentInnings));
+          // CRITICAL: Only include bowlers who are:
+          // 1. From current innings (scoreboard matches)
+          // 2. From bowling team (opposite of batting team)
+          // 3. ACTIVE (active === true) - this is the most reliable indicator of current bowlers
+          //    If API doesn't set active=true, they're NOT currently bowling
+          const isActive = b.active === true;
+          const hasOvers = b.overs > 0; // Must have bowled at least some overs
+          
+          const result = isFromCurrentInnings && isFromBowlingTeam && hasOvers && isActive;
           
           if (result) {
             console.log('[Transformer] Found current bowler:', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'overs:', b.overs, 'wickets:', b.wickets);
+          } else if (isFromCurrentInnings && isFromBowlingTeam && hasOvers) {
+            // Log why bowler was excluded (for debugging)
+            console.log('[Transformer] Excluded bowler (not active):', b.player_id, 'active:', b.active, 'overs:', b.overs, 'wickets:', b.wickets);
           }
           return result;
         })
         .sort((a: any, b: any) => {
-          // Sort by active first (active bowlers come first), then by most recent (highest overs)
+          // Sort by most recent activity - check overs (more overs = likely more recent)
+          // But prioritize active=true bowlers
           if (a.active && !b.active) return -1;
           if (!a.active && b.active) return 1;
           return (b.overs || 0) - (a.overs || 0);

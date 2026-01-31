@@ -53,11 +53,20 @@ export class SportsMonksService {
       
       this.logger.log(`Calling v2.0 API: ${endpoint}`, 'SportsMonksService');
       
+      // Add timestamp to prevent caching - ensure fresh data for current batters/bowlers
+      const timestamp = Date.now();
+      
       const response = await firstValueFrom(
         this.httpService.get(endpoint, {
           params: {
             api_token: this.apiToken,
             include: includeParam,
+            _t: timestamp, // Cache buster
+          },
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
           },
         }),
       );
@@ -342,12 +351,21 @@ export class SportsMonksService {
         ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
         : 'scores,participants,lineups,events';
       
+      // Add timestamp to prevent caching - ensure fresh data for current batters/bowlers
+      const timestamp = Date.now();
+      
       try {
         response = await firstValueFrom(
           this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
             params: {
               api_token: this.apiToken,
               include: includeParam,
+              _t: timestamp, // Cache buster
+            },
+            headers: {
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0',
             },
           }),
         );
@@ -369,6 +387,12 @@ export class SportsMonksService {
                 params: {
                   api_token: this.apiToken,
                   include: battingBowlingInclude,
+                  _t: timestamp, // Cache buster
+                },
+                headers: {
+                  'Cache-Control': 'no-cache, no-store, must-revalidate',
+                  'Pragma': 'no-cache',
+                  'Expires': '0',
                 },
               }),
             );
@@ -390,6 +414,12 @@ export class SportsMonksService {
                     params: {
                       api_token: this.apiToken,
                       include: simpleBattingBowlingInclude,
+                      _t: timestamp, // Cache buster
+                    },
+                    headers: {
+                      'Cache-Control': 'no-cache, no-store, must-revalidate',
+                      'Pragma': 'no-cache',
+                      'Expires': '0',
                     },
                   }),
                 );
@@ -408,6 +438,12 @@ export class SportsMonksService {
                         params: {
                           api_token: this.apiToken,
                           include: simpleIncludeParam,
+                          _t: timestamp, // Cache buster
+                        },
+                        headers: {
+                          'Cache-Control': 'no-cache, no-store, must-revalidate',
+                          'Pragma': 'no-cache',
+                          'Expires': '0',
                         },
                       }),
                     );
@@ -566,6 +602,9 @@ export class SportsMonksService {
       let balls: any[] = [];
       let response: any = null;
       
+      // Add timestamp to prevent caching - ensure fresh commentary data
+      const timestamp = Date.now();
+      
       // First try: with all available includes
       try {
         response = await firstValueFrom(
@@ -573,6 +612,12 @@ export class SportsMonksService {
             params: {
               api_token: this.apiToken,
               include: 'balls.batsman,balls.bowler,balls.score,balls.batsmanout,balls.catchstump',
+              _t: timestamp, // Cache buster
+            },
+            headers: {
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0',
             },
           }),
         );
@@ -587,6 +632,12 @@ export class SportsMonksService {
                 params: {
                   api_token: this.apiToken,
                   include: 'balls',
+                  _t: timestamp, // Cache buster
+                },
+                headers: {
+                  'Cache-Control': 'no-cache, no-store, must-revalidate',
+                  'Pragma': 'no-cache',
+                  'Expires': '0',
                 },
               }),
             );

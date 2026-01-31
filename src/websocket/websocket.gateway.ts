@@ -160,7 +160,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
           } catch (error) {
             this.logger.error(`Error updating match ${matchId}`, error);
           }
-        }, 10000); // 10 seconds - more frequent updates for current batters/bowlers
+        }, 5000); // 5 seconds - very frequent updates for current batters/bowlers
 
         this.matchUpdateIntervals.set(matchKey, interval);
       }
