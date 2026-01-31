@@ -3,15 +3,20 @@ import { determineMatchStatus } from './status-determiner';
 /**
  * Extract player name from various possible API response structures
  * Checks multiple locations where player data might be stored
+ * SportsMonks v2.0 API can return player data in different formats:
+ * - Direct object: { fullname: "...", firstname: "...", lastname: "..." }
+ * - Nested in data: { data: { fullname: "..." } }
+ * - As resource object: { resource: "players", id: 123, fullname: "..." }
  */
-function extractPlayerName(playerData: any, playerId?: any): string {
+function extractPlayerName(playerData: any, playerId?: any): string | undefined {
+  // CRITICAL: Do not use placeholder values. If API doesn't provide player name, return undefined.
   if (!playerData && !playerId) {
-    return 'Unknown Player';
+    return undefined;
   }
 
   // If playerData is a string, use it directly
   if (typeof playerData === 'string' && playerData.trim()) {
-    return playerData;
+    return playerData.trim();
   }
 
   // If playerData is an object, check various possible fields
@@ -19,22 +24,39 @@ function extractPlayerName(playerData: any, playerId?: any): string {
     // Check for nested data structure (API might return { data: { ... } })
     const actualData = playerData.data || playerData;
     
-    // Try common field names for player names
-    const name = actualData.fullname || 
-                 actualData.full_name || 
-                 actualData.name || 
-                 actualData.firstname || 
-                 actualData.first_name ||
-                 (actualData.firstname && actualData.lastname ? `${actualData.firstname} ${actualData.lastname}` : null) ||
-                 (actualData.first_name && actualData.last_name ? `${actualData.first_name} ${actualData.last_name}` : null);
+    // Try common field names for player names (SportsMonks v2.0 format)
+    // Priority: fullname > full_name > name > firstname+lastname > first_name+last_name
+    let name = actualData.fullname || 
+               actualData.full_name || 
+               actualData.name;
+    
+    // If no direct name field, try combining firstname and lastname
+    if (!name) {
+      if (actualData.firstname && actualData.lastname) {
+        name = `${actualData.firstname} ${actualData.lastname}`;
+      } else if (actualData.first_name && actualData.last_name) {
+        name = `${actualData.first_name} ${actualData.last_name}`;
+      } else if (actualData.firstname) {
+        name = actualData.firstname;
+      } else if (actualData.first_name) {
+        name = actualData.first_name;
+      }
+    }
     
     if (name && typeof name === 'string' && name.trim()) {
       return name.trim();
     }
+    
+    // Log for debugging if we have player data but no name
+    if (process.env.NODE_ENV === 'development' && playerId) {
+      console.warn(`[extractPlayerName] Player ${playerId} data structure:`, Object.keys(actualData));
+    }
   }
 
-  // Fallback to player ID if no name found
-  return `Player ${playerId || 'Unknown'}`;
+  // CRITICAL: Do not use placeholder values like "Player {id}" or "Unknown Player"
+  // If API doesn't provide player name, return undefined
+  // The frontend should handle missing player names appropriately
+  return undefined;
 }
 
 /**
@@ -139,9 +161,10 @@ export function parseApiResultNote(
 }
 
 /**
- * Calculate match result for completed matches
- * Determines winner, margin, and margin type (runs or wickets) based on batting order
- * This is used as a fallback when API doesn't provide result in note field
+ * @deprecated This function is no longer used.
+ * All match results MUST come from the SportsMonks API (via parseApiResultNote).
+ * Local calculation of results is strictly forbidden to ensure highest accuracy.
+ * This function is kept only for reference and should never be called.
  */
 export function calculateMatchResult(
   currentScore: any,
@@ -150,107 +173,11 @@ export function calculateMatchResult(
   localteamId: any,
   visitorteamId: any,
   isV2Format: boolean,
-  winnerTeamId?: any // Optional: winner_team_id from API
+  winnerTeamId?: any
 ): any {
-  try {
-    const homeRuns = currentScore.home?.runs || 0;
-    const awayRuns = currentScore.away?.runs || 0;
-    const homeWickets = currentScore.home?.wickets ?? 10;
-    const awayWickets = currentScore.away?.wickets ?? 10;
-
-    // Determine which team batted first based on scoreboard order
-    // S1 = first innings, S2 = second innings
-    let firstInningsTeam: 'home' | 'away' | null = null;
-    let secondInningsTeam: 'home' | 'away' | null = null;
-
-    if (isV2Format && scores.length >= 2) {
-      // Find S1 (first innings) and S2 (second innings)
-      const firstInnings = scores.find((s: any) => s.scoreboard === 'S1');
-      const secondInnings = scores.find((s: any) => s.scoreboard === 'S2');
-
-      if (firstInnings && secondInnings) {
-        if (firstInnings.team_id === localteamId) {
-          firstInningsTeam = 'home';
-          secondInningsTeam = 'away';
-        } else if (firstInnings.team_id === visitorteamId) {
-          firstInningsTeam = 'away';
-          secondInningsTeam = 'home';
-        }
-      }
-    }
-
-    // Determine winner - use API's winner_team_id if available, otherwise calculate from scores
-    let homeWon: boolean;
-    if (winnerTeamId !== undefined && winnerTeamId !== null) {
-      // Use API's winner_team_id as primary source of truth
-      homeWon = winnerTeamId === localteamId;
-    } else {
-      // Fallback: calculate from scores
-      homeWon = homeRuns > awayRuns;
-    }
-    
-    const winner = homeWon ? 'home' : 'away';
-    const winnerName = homeWon ? teams.home.name : teams.away.name;
-    const winnerScore = homeWon ? currentScore.home : currentScore.away;
-    const winnerWickets = winnerScore?.wickets ?? 10;
-
-    // Calculate margin
-    const runMargin = Math.abs(homeRuns - awayRuns);
-    let marginType: 'runs' | 'wickets' = 'runs';
-    let resultText = '';
-    let finalMargin = runMargin; // Default to run margin
-
-    // Determine margin type based on batting order
-    if (firstInningsTeam && secondInningsTeam) {
-      // We know batting order
-      if (winner === firstInningsTeam) {
-        // Team batting first won - always by runs
-        marginType = 'runs';
-        finalMargin = runMargin;
-        resultText = `${winnerName} won by ${runMargin} runs`;
-      } else {
-        // Team batting second won
-        if (winnerWickets < 10) {
-          // Winner has wickets remaining - won by wickets
-          const wicketsRemaining = 10 - winnerWickets;
-          marginType = 'wickets';
-          finalMargin = wicketsRemaining; // Use wickets remaining, not run margin
-          resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
-        } else {
-          // Winner lost all wickets but still won (rare) - won by runs
-          marginType = 'runs';
-          finalMargin = runMargin;
-          resultText = `${winnerName} won by ${runMargin} runs`;
-        }
-      }
-    } else {
-      // Fallback: Infer batting order from wickets
-      // If winner has wickets remaining, they likely batted second
-      if (winnerWickets < 10) {
-        // Winner has wickets remaining - likely batted second and won by wickets
-        const wicketsRemaining = 10 - winnerWickets;
-        marginType = 'wickets';
-        finalMargin = wicketsRemaining; // Use wickets remaining, not run margin
-        resultText = `${winnerName} won by ${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
-      } else {
-        // Winner lost all wickets - likely batted first and won by runs
-        marginType = 'runs';
-        finalMargin = runMargin;
-        resultText = `${winnerName} won by ${runMargin} runs`;
-      }
-    }
-
-    return {
-      winner,
-      winnerName,
-      margin: finalMargin, // Use correct margin (runs or wickets)
-      marginType,
-      resultText,
-    };
-  } catch (error) {
-    console.error('[Transformer] Error calculating match result:', error);
-    return undefined;
-  }
+  // CRITICAL: This function should NEVER be called.
+  // All results must come from API via parseApiResultNote.
+  throw new Error('calculateMatchResult is deprecated. All results must come from SportsMonks API.');
 }
 
 export function transformApiMatchToFrontend(apiMatch: any): any {
@@ -279,12 +206,20 @@ export function transformApiMatchToFrontend(apiMatch: any): any {
   };
   const format = formatMap[apiMatch.matchType?.toLowerCase()] || 't20';
 
-  const venueParts = (apiMatch.venue || '').split(',').map((p: string) => p.trim());
-  const venue = {
-    name: venueParts[0] || 'Unknown Venue',
-    city: venueParts[1] || venueParts[0] || 'Unknown',
-    country: venueParts[2] || venueParts[1] || 'Unknown',
-  };
+  // CRITICAL: Only use API-provided venue data. Do not use placeholder values.
+  let venue: { name?: string; city?: string; country?: string } | undefined = undefined;
+  if (apiMatch.venue) {
+    const venueParts = apiMatch.venue.split(',').map((p: string) => p.trim());
+    venue = {
+      name: venueParts[0] || undefined,
+      city: venueParts[1] || venueParts[0] || undefined,
+      country: venueParts[2] || venueParts[1] || undefined,
+    };
+    // If no valid venue data, set to undefined
+    if (!venue.name && !venue.city && !venue.country) {
+      venue = undefined;
+    }
+  }
 
   return {
     _id: apiMatch.id || apiMatch.matchId,
@@ -292,35 +227,40 @@ export function transformApiMatchToFrontend(apiMatch: any): any {
     name: apiMatch.name || `${homeTeam.name || teams[0]} vs ${awayTeam.name || teams[1]}`,
     teams: {
       home: {
-        id: homeTeam.name || teams[0] || '',
-        name: homeTeam.name || teams[0] || 'Team 1',
-        flag: '🏏',
-        shortName: homeTeam.shortname || homeTeam.shortName || (teams[0]?.substring(0, 3).toUpperCase() || 'T1'),
+        // CRITICAL: Only use API-provided team data. Do not use placeholder values like 'Team 1'.
+        id: homeTeam.id || homeTeam.team_id?.toString() || homeTeam.name || teams[0]?.id || teams[0]?.team_id?.toString() || undefined,
+        name: homeTeam.name || teams[0]?.name || undefined,
+        flag: homeTeam.image_path || homeTeam.flag || teams[0]?.image_path || teams[0]?.flag || undefined,
+        shortName: homeTeam.shortname || homeTeam.shortName || teams[0]?.shortname || teams[0]?.shortName || undefined,
       },
       away: {
-        id: awayTeam.name || teams[1] || '',
-        name: awayTeam.name || teams[1] || 'Team 2',
-        flag: '🏏',
-        shortName: awayTeam.shortname || awayTeam.shortName || (teams[1]?.substring(0, 3).toUpperCase() || 'T2'),
+        // CRITICAL: Only use API-provided team data. Do not use placeholder values like 'Team 2'.
+        id: awayTeam.id || awayTeam.team_id?.toString() || awayTeam.name || teams[1]?.id || teams[1]?.team_id?.toString() || undefined,
+        name: awayTeam.name || teams[1]?.name || undefined,
+        flag: awayTeam.image_path || awayTeam.flag || teams[1]?.image_path || teams[1]?.flag || undefined,
+        shortName: awayTeam.shortname || awayTeam.shortName || teams[1]?.shortname || teams[1]?.shortName || undefined,
       },
     },
     venue,
     status,
     format,
     startTime: apiMatch.dateTimeGMT ? new Date(apiMatch.dateTimeGMT) : apiMatch.date ? new Date(apiMatch.date) : new Date(),
+    // CRITICAL: Only use API-provided score data. Do not calculate balls from overs.
     currentScore: scores.length > 0
       ? {
           home: {
-            runs: homeScore.r || 0,
-            wickets: homeScore.w || 0,
-            overs: parseFloat(homeScore.o?.toString() || '0') || 0,
-            balls: Math.floor((parseFloat(homeScore.o?.toString() || '0') % 1) * 10) || 0,
+            runs: homeScore.r !== undefined && homeScore.r !== null ? homeScore.r : undefined,
+            wickets: homeScore.w !== undefined && homeScore.w !== null ? homeScore.w : undefined,
+            overs: homeScore.o !== undefined && homeScore.o !== null ? parseFloat(homeScore.o.toString()) : undefined,
+            // CRITICAL: Only use API-provided balls. Do not calculate from overs.
+            balls: homeScore.b !== undefined && homeScore.b !== null ? homeScore.b : undefined,
           },
           away: {
-            runs: awayScore.r || 0,
-            wickets: awayScore.w || 0,
-            overs: parseFloat(awayScore.o?.toString() || '0') || 0,
-            balls: Math.floor((parseFloat(awayScore.o?.toString() || '0') % 1) * 10) || 0,
+            runs: awayScore.r !== undefined && awayScore.r !== null ? awayScore.r : undefined,
+            wickets: awayScore.w !== undefined && awayScore.w !== null ? awayScore.w : undefined,
+            overs: awayScore.o !== undefined && awayScore.o !== null ? parseFloat(awayScore.o.toString()) : undefined,
+            // CRITICAL: Only use API-provided balls. Do not calculate from overs.
+            balls: awayScore.b !== undefined && awayScore.b !== null ? awayScore.b : undefined,
           },
         }
       : undefined,
@@ -968,15 +908,20 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     }
   }
 
+  // CRITICAL: Only use API-provided score data. Do not use fallbacks.
   let score: any = undefined;
   if (status === 'completed' && scores.length > 0) {
-    // Use total for v2.0 format
-    const homeFinal = homeScore.total || 0;
-    const awayFinal = awayScore.total || 0;
-    score = {
-      home: homeFinal,
-      away: awayFinal,
-    };
+    // Use total for v2.0 format - only if API provides it
+    const homeFinal = homeScore.total !== undefined && homeScore.total !== null ? homeScore.total : undefined;
+    const awayFinal = awayScore.total !== undefined && awayScore.total !== null ? awayScore.total : undefined;
+    
+    // Only set score if both values are provided by API
+    if (homeFinal !== undefined && awayFinal !== undefined) {
+      score = {
+        home: homeFinal,
+        away: awayFinal,
+      };
+    }
   }
 
   // Extract match result ONLY for completed matches
@@ -1002,24 +947,10 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       }
     }
     
-    // Fallback: Calculate from scores if API note is not available or parsing failed
-    if (!matchResult && currentScore && scores.length >= 2) {
-        matchResult = calculateMatchResult(
-        currentScore,
-        scores,
-        teams,
-        apiMatch.localteam_id,
-        apiMatch.visitorteam_id,
-        true, // Always v2.0 format
-        apiMatch.winner_team_id // Use API's winner_team_id if available
-      );
-      if (matchResult) {
-        matchResult.dataSource = 'calculated';
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[Transformer] Calculated result (API note not available):', matchResult.resultText);
-        }
-      }
-    }
+    // CRITICAL: Never calculate result locally - only use API-provided data
+    // If API doesn't provide result (no note field or winner_team_id), result will be undefined
+    // The services (CompletedMatchService, MatchTransitionService) will handle this by skipping the match
+    // This ensures we only use results from the SportsMonks API
   }
 
   // Ensure matchId is always present
@@ -1067,45 +998,142 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
             number: index + 1,
             team: s.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
             teamId: s.team_id?.toString(),
-            runs: s.total || 0,
-            wickets: s.wickets || 0,
-            overs: parseFloat(s.overs?.toString() || '0') || 0,
-            balls: 0,
-            runRate: parseFloat(s.overs?.toString() || '0') > 0 
-              ? ((s.total || 0) / parseFloat(s.overs?.toString() || '1')) 
-              : 0,
+            // CRITICAL: Only use API-provided values. Do not use fallbacks.
+            runs: s.total !== undefined && s.total !== null ? s.total : undefined,
+            wickets: s.wickets !== undefined && s.wickets !== null ? s.wickets : undefined,
+            overs: s.overs !== undefined && s.overs !== null ? parseFloat(s.overs.toString()) : undefined,
+            // CRITICAL: Only use API-provided balls. Do not assume 0.
+            balls: s.balls !== undefined && s.balls !== null ? s.balls : undefined,
+            // CRITICAL: Only use API-provided run rate. Do not calculate locally.
+            runRate: s.run_rate !== undefined && s.run_rate !== null ? s.run_rate : undefined,
           }))
       : undefined,
-    // Additional match information
-    matchNote: apiMatch.note || undefined,
-    round: apiMatch.round || undefined,
+    // Additional match information - Extract ALL available fields from API
+    matchNote: apiMatch.note !== undefined && apiMatch.note !== null ? apiMatch.note : undefined,
+    round: apiMatch.round !== undefined && apiMatch.round !== null ? apiMatch.round : undefined,
     tossWon: apiMatch.toss_won_team_id 
       ? (apiMatch.toss_won_team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name)
       : undefined,
-    elected: apiMatch.elected || undefined,
-    target: apiMatch.note?.includes('Target') 
-      ? parseInt(apiMatch.note.match(/Target (\d+)/)?.[1] || '0')
-      : undefined,
+    elected: apiMatch.elected !== undefined && apiMatch.elected !== null ? apiMatch.elected : undefined,
+    // CRITICAL: Only use API-provided target field. Do not parse from note or calculate locally.
+    target: apiMatch.target !== undefined && apiMatch.target !== null ? apiMatch.target : undefined,
     endingAt: apiMatch.ending_at ? new Date(apiMatch.ending_at) : undefined,
     // Match result (ONLY for completed matches - undefined for live matches)
     result: status === 'completed' ? matchResult : undefined,
-    // Additional API fields for completed matches
-    apiNote: apiMatch.note || undefined, // Raw API note field
+    // Additional API fields - Extract ALL available fields
+    apiNote: apiMatch.note !== undefined && apiMatch.note !== null ? apiMatch.note : undefined,
     tossWonTeamId: apiMatch.toss_won_team_id?.toString() || undefined,
     manOfMatchId: apiMatch.man_of_match_id?.toString() || undefined,
     manOfSeriesId: apiMatch.man_of_series_id?.toString() || undefined,
-    totalOversPlayed: apiMatch.total_overs_played || undefined,
-    superOver: apiMatch.super_over || false,
-    followOn: apiMatch.follow_on || false,
-    drawNoResult: apiMatch.draw_noresult || false,
+    totalOversPlayed: apiMatch.total_overs_played !== undefined && apiMatch.total_overs_played !== null ? apiMatch.total_overs_played : undefined,
+    superOver: apiMatch.super_over !== undefined && apiMatch.super_over !== null ? apiMatch.super_over : undefined,
+    followOn: apiMatch.follow_on !== undefined && apiMatch.follow_on !== null ? apiMatch.follow_on : undefined,
+    drawNoResult: apiMatch.draw_noresult !== undefined && apiMatch.draw_noresult !== null ? apiMatch.draw_noresult : undefined,
+    // Additional API fields that might be available
+    refereeId: apiMatch.referee_id?.toString() || undefined,
+    firstUmpireId: apiMatch.firstumpire_id?.toString() || undefined,
+    secondUmpireId: apiMatch.secondumpire_id?.toString() || undefined,
+    tvUmpireId: apiMatch.tvumpire_id?.toString() || undefined,
+    leagueId: apiMatch.league_id?.toString() || undefined,
+    leagueName: apiMatch.league?.name || undefined,
+    seasonId: apiMatch.season_id?.toString() || undefined,
+    seasonName: apiMatch.season?.name || undefined,
+    stageId: apiMatch.stage_id?.toString() || undefined,
+    stageName: apiMatch.stage?.name || undefined,
+    roundName: apiMatch.round_name || undefined,
+    type: apiMatch.type || undefined,
+    matchType: apiMatch.match_type || undefined,
+    stateId: apiMatch.state_id !== undefined && apiMatch.state_id !== null ? apiMatch.state_id : undefined,
+    live: apiMatch.live !== undefined && apiMatch.live !== null ? apiMatch.live : undefined,
+    // Venue additional fields
+    venueId: apiMatch.venue_id?.toString() || undefined,
+    venueCapacity: apiMatch.venue?.capacity !== undefined && apiMatch.venue?.capacity !== null ? apiMatch.venue.capacity : undefined,
+    venueImagePath: apiMatch.venue?.image_path || undefined,
+    // Team additional fields
+    homeTeamId: apiMatch.localteam_id?.toString() || undefined,
+    awayTeamId: apiMatch.visitorteam_id?.toString() || undefined,
+    homeTeamCode: apiMatch.localteam?.code || undefined,
+    awayTeamCode: apiMatch.visitorteam?.code || undefined,
+    homeTeamImagePath: apiMatch.localteam?.image_path || undefined,
+    awayTeamImagePath: apiMatch.visitorteam?.image_path || undefined,
     // Data source tracking
-    dataSource: matchResult?.dataSource || (status === 'completed' ? 'calculated' : undefined),
+    dataSource: matchResult?.dataSource || undefined, // Only set if matchResult exists (from API)
     apiFetchedAt: status === 'completed' ? new Date() : undefined,
     isCompleteData: status === 'completed' ? true : false,
+    // Live data - Extract ALL available live match data from API
+    liveData: status === 'live' ? (() => {
+      // Extract live data from API - only use API-provided fields
+      const liveData: any = {};
+      
+      // Check scoreboards for live data fields (they often contain the most up-to-date info)
+      const currentScoreboard = scores && scores.length > 0 
+        ? scores.find((s: any) => s.type === 'total' && (s.overs > 0 || s.total > 0)) || scores[0]
+        : null;
+      
+      // Current over (if available from API - check both root and scoreboard)
+      if (apiMatch.current_over !== undefined && apiMatch.current_over !== null) {
+        liveData.currentOver = apiMatch.current_over;
+      } else if (currentScoreboard?.current_over !== undefined && currentScoreboard?.current_over !== null) {
+        liveData.currentOver = currentScoreboard.current_over;
+      }
+      
+      // Required run rate (if available from API - check both root and scoreboard)
+      if (apiMatch.required_run_rate !== undefined && apiMatch.required_run_rate !== null) {
+        liveData.requiredRunRate = apiMatch.required_run_rate;
+      } else if (currentScoreboard?.required_run_rate !== undefined && currentScoreboard?.required_run_rate !== null) {
+        liveData.requiredRunRate = currentScoreboard.required_run_rate;
+      }
+      
+      // Current run rate (if available from API - check both root and scoreboard)
+      if (apiMatch.current_run_rate !== undefined && apiMatch.current_run_rate !== null) {
+        liveData.currentRunRate = apiMatch.current_run_rate;
+      } else if (currentScoreboard?.current_run_rate !== undefined && currentScoreboard?.current_run_rate !== null) {
+        liveData.currentRunRate = currentScoreboard.current_run_rate;
+      } else if (currentScoreboard?.run_rate !== undefined && currentScoreboard?.run_rate !== null) {
+        liveData.currentRunRate = currentScoreboard.run_rate;
+      }
+      
+      // Runs remaining (if available from API - check scoreboard)
+      if (currentScoreboard?.runs_remaining !== undefined && currentScoreboard?.runs_remaining !== null) {
+        liveData.runsRemaining = currentScoreboard.runs_remaining;
+      } else if (apiMatch.runs_remaining !== undefined && apiMatch.runs_remaining !== null) {
+        liveData.runsRemaining = apiMatch.runs_remaining;
+      }
+      
+      // Balls remaining (if available from API - check scoreboard)
+      if (currentScoreboard?.balls_remaining !== undefined && currentScoreboard?.balls_remaining !== null) {
+        liveData.ballsRemaining = currentScoreboard.balls_remaining;
+      } else if (apiMatch.balls_remaining !== undefined && apiMatch.balls_remaining !== null) {
+        liveData.ballsRemaining = apiMatch.balls_remaining;
+      }
+      
+      // Overs remaining (if available from API - check scoreboard)
+      if (currentScoreboard?.overs_remaining !== undefined && currentScoreboard?.overs_remaining !== null) {
+        liveData.oversRemaining = currentScoreboard.overs_remaining;
+      } else if (apiMatch.overs_remaining !== undefined && apiMatch.overs_remaining !== null) {
+        liveData.oversRemaining = apiMatch.overs_remaining;
+      }
+      
+      // Return undefined if no live data available (don't create empty object)
+      return Object.keys(liveData).length > 0 ? liveData : undefined;
+    })() : undefined,
     // Current batters and bowlers for live view
+    // CRITICAL: Only include for LIVE matches, not completed/finished matches
     currentBatters: (() => {
       if (!isV2Format) {
         console.log('[Transformer] Not v2 format, skipping currentBatters');
+        return undefined;
+      }
+      
+      // Check if match is finished/completed - don't show current batters for finished matches
+      const matchStateId = apiMatch.state_id;
+      const apiMatchStatus = apiMatch.status || '';
+      const isFinished = matchStateId === 5 || matchStateId === 6 || 
+                        apiMatchStatus.toLowerCase().includes('finished') || 
+                        apiMatchStatus.toLowerCase() === 'completed' ||
+                        apiMatch.matchEnded === true;
+      if (isFinished) {
+        console.log('[Transformer] Match is finished (state_id:', matchStateId, 'status:', apiMatchStatus, '), skipping currentBatters');
         return undefined;
       }
       
@@ -1140,20 +1168,81 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       
       console.log('[Transformer] Processing', battingData.length, 'batting records');
       
-      // Filter for current batters (not out, and have some activity)
-      // Relaxed filter: include any batter that's not out, even if they haven't scored yet
+      // CRITICAL: Use API's status field to determine current innings - NEVER calculate locally
+      // API status field tells us which innings is in progress: "1st Innings", "2nd Innings", etc.
+      const matchStatus = apiMatch.status || '';
+      const isFirstInnings = matchStatus.includes('1st Innings') || matchStatus === '1st Innings';
+      const isSecondInnings = matchStatus.includes('2nd Innings') || matchStatus === '2nd Innings';
+      
+      // Determine which team is currently batting based on API status
+      // For "1st Innings": usually the team that won the toss (or localteam)
+      // For "2nd Innings": the other team
+      let currentBattingTeamId: number | null = null;
+      if (isFirstInnings) {
+        // First innings: usually the team that won toss or localteam
+        currentBattingTeamId = apiMatch.toss_won_team_id || apiMatch.localteam_id || null;
+      } else if (isSecondInnings) {
+        // Second innings: the other team (not the one that batted first)
+        const firstInningsTeamId = apiMatch.toss_won_team_id || apiMatch.localteam_id;
+        currentBattingTeamId = firstInningsTeamId === apiMatch.localteam_id 
+          ? apiMatch.visitorteam_id 
+          : apiMatch.localteam_id;
+      }
+      
+      // Find the current innings scoreboard for the team currently batting
+      // Use most recent updated_at to identify the active scoreboard for that team
+      const currentInningsScoreboard = apiMatch.scoreboards && currentBattingTeamId
+        ? apiMatch.scoreboards
+            .filter((sb: any) => 
+              sb.type === 'total' && 
+              sb.overs > 0 && 
+              sb.team_id === currentBattingTeamId
+            )
+            .sort((a: any, b: any) => {
+              // Sort by most recent updated_at (newest first)
+              const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+              const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+              return bTime - aTime;
+            })[0]
+        : null;
+      
+      const currentScoreboardId = currentInningsScoreboard?.scoreboard || null;
+      console.log('[Transformer] API status:', matchStatus, 'Current batting team_id:', currentBattingTeamId, 'Current innings scoreboard:', currentScoreboardId, 'overs:', currentInningsScoreboard?.overs, 'updated_at:', currentInningsScoreboard?.updated_at);
+      
+      // Filter for current batters - ONLY from current innings AND actually active
+      // CRITICAL: Only include batters who are:
+      // 1. From the current innings (scoreboard matches)
+      // 2. Active (active === true) OR not out and have recent activity
       const currentBatsmen = battingData
         .filter((b: any) => {
-          const isNotOut = !b.batsmanout_id;
-          const hasActivity = b.active === true || b.score > 0 || b.ball > 0;
-          const result = isNotOut && (hasActivity || b.active === true);
+          // Only include batters from current innings
+          const isFromCurrentInnings = !currentScoreboardId || b.scoreboard === currentScoreboardId;
+          
+          // CRITICAL: Only include batters who are ACTUALLY currently batting
+          // The API may not always set active=true, so we need to check multiple conditions:
+          // 1. Must be from current innings (scoreboard matches)
+          // 2. Must not be out (batsmanout_id is null/undefined)
+          // 3. Must have recent activity (score > 0 or ball > 0) OR active=true
+          // 4. Must be from the team that's currently batting (check team_id matches current innings team)
+          const isNotOut = !b.batsmanout_id || b.batsmanout_id === null;
+          const hasActivity = (b.score > 0 || b.ball > 0);
+          const isActive = b.active === true;
+          
+          // Get the team_id of the current innings
+          const currentInningsTeamId = currentInningsScoreboard?.team_id;
+          const isFromCurrentTeam = !currentInningsTeamId || b.team_id === currentInningsTeamId;
+          
+          // For current batters: must be from current innings, current team, not out, and have activity
+          // Prioritize active=true, but also include not-out batters with activity from current innings
+          const result = isFromCurrentInnings && isFromCurrentTeam && isNotOut && (isActive || hasActivity);
+          
           if (result) {
-            console.log('[Transformer] Found current batter:', b.player_id, 'active:', b.active, 'score:', b.score, 'ball:', b.ball);
+            console.log('[Transformer] Found current batter:', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'score:', b.score, 'ball:', b.ball, 'batsmanout_id:', b.batsmanout_id);
           }
           return result;
         })
         .sort((a: any, b: any) => {
-          // Sort by active first, then by runs
+          // Sort by active first (active batters come first), then by runs
           if (a.active && !b.active) return -1;
           if (!a.active && b.active) return 1;
           return (b.score || 0) - (a.score || 0);
@@ -1167,24 +1256,45 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         return undefined;
       }
       
-      return currentBatsmen.map((b: any) => {
-        const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
-        return {
-          playerId: b.player_id?.toString(),
-          playerName,
-          runs: b.score || 0,
-          balls: b.ball || 0,
-          fours: b.four_x || 0,
-          sixes: b.six_x || 0,
-          strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
-          teamId: b.team_id?.toString(),
-          teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
-        };
-      });
+      return currentBatsmen
+        .map((b: any) => {
+          // CRITICAL: Check multiple possible locations for player data from API
+          // API may return player data as: player, playerinfo, player_data, batsman (for batting), bowler (for bowling)
+          const playerName = extractPlayerName(
+            b.player || b.batsman || b.playerinfo || b.player_data || b.bowler, 
+            b.player_id
+          );
+          // CRITICAL: Only use API-provided values. Do not use fallbacks like || 0
+          return {
+            playerId: b.player_id?.toString(),
+            playerName, // May be undefined - will be filtered out
+            runs: b.score !== undefined && b.score !== null ? b.score : 0,
+            balls: b.ball !== undefined && b.ball !== null ? b.ball : 0,
+            fours: b.four_x !== undefined && b.four_x !== null ? b.four_x : 0,
+            sixes: b.six_x !== undefined && b.six_x !== null ? b.six_x : 0,
+            // CRITICAL: Only use API-provided strike rate. Do not calculate locally.
+            strikeRate: b.rate !== undefined && b.rate !== null ? b.rate : (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
+            teamId: b.team_id?.toString(),
+            teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+          };
+        });
+      // NOTE: Filtering will be done AFTER enrichment in the service
     })(),
     currentBowlers: (() => {
       if (!isV2Format) {
         console.log('[Transformer] Not v2 format, skipping currentBowlers');
+        return undefined;
+      }
+      
+      // Check if match is finished/completed - don't show current bowlers for finished matches
+      const matchStateId = apiMatch.state_id;
+      const apiMatchStatus = apiMatch.status || '';
+      const isFinished = matchStateId === 5 || matchStateId === 6 || 
+                        apiMatchStatus.toLowerCase().includes('finished') || 
+                        apiMatchStatus.toLowerCase() === 'completed' ||
+                        apiMatch.matchEnded === true;
+      if (isFinished) {
+        console.log('[Transformer] Match is finished (state_id:', matchStateId, 'status:', apiMatchStatus, '), skipping currentBowlers');
         return undefined;
       }
       
@@ -1219,21 +1329,77 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       
       console.log('[Transformer] Processing', bowlingData.length, 'bowling records');
       
-      // Filter for current bowlers (have bowled at least some overs or are active)
-      // Relaxed filter: include any bowler that's active or has bowled
+      // CRITICAL: Use API's status field to determine current innings - NEVER calculate locally
+      // API status field tells us which innings is in progress: "1st Innings", "2nd Innings", etc.
+      const matchStatus = apiMatch.status || '';
+      const isFirstInnings = matchStatus.includes('1st Innings') || matchStatus === '1st Innings';
+      const isSecondInnings = matchStatus.includes('2nd Innings') || matchStatus === '2nd Innings';
+      
+      // Determine which team is currently batting (bowling team is the opposite)
+      let currentBattingTeamId: number | null = null;
+      if (isFirstInnings) {
+        currentBattingTeamId = apiMatch.toss_won_team_id || apiMatch.localteam_id || null;
+      } else if (isSecondInnings) {
+        const firstInningsTeamId = apiMatch.toss_won_team_id || apiMatch.localteam_id;
+        currentBattingTeamId = firstInningsTeamId === apiMatch.localteam_id 
+          ? apiMatch.visitorteam_id 
+          : apiMatch.localteam_id;
+      }
+      
+      // Find the current innings scoreboard for the team currently batting
+      // Use most recent updated_at to identify the active scoreboard for that team
+      const currentInningsScoreboard = apiMatch.scoreboards && currentBattingTeamId
+        ? apiMatch.scoreboards
+            .filter((sb: any) => 
+              sb.type === 'total' && 
+              sb.overs > 0 && 
+              sb.team_id === currentBattingTeamId
+            )
+            .sort((a: any, b: any) => {
+              // Sort by most recent updated_at (newest first)
+              const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+              const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+              return bTime - aTime;
+            })[0]
+        : null;
+      
+      const currentScoreboardId = currentInningsScoreboard?.scoreboard || null;
+      console.log('[Transformer] API status:', matchStatus, 'Current batting team_id:', currentBattingTeamId, 'Current innings scoreboard for bowling:', currentScoreboardId, 'overs:', currentInningsScoreboard?.overs, 'updated_at:', currentInningsScoreboard?.updated_at);
+      
+      // Filter for current bowlers - ONLY from current innings AND actually active
+      // CRITICAL: Only include bowlers who are:
+      // 1. From the current innings (scoreboard matches)
+      // 2. Active (active === true) OR have bowled recently in current innings
       const currentBowlers = bowlingData
         .filter((b: any) => {
-          const hasOvers = b.overs > 0;
+          // Only include bowlers from current innings
+          const isFromCurrentInnings = !currentScoreboardId || b.scoreboard === currentScoreboardId;
+          
+          // CRITICAL: Only include bowlers who are ACTUALLY currently bowling
+          // The API may not always set active=true, so we need to check multiple conditions:
+          // 1. Must be from current innings (scoreboard matches)
+          // 2. Must have bowled (overs > 0)
+          // 3. Must be from the team that's currently bowling (check team_id matches opposite of current innings team)
           const isActive = b.active === true;
-          const hasWickets = b.wickets >= 0;
-          const result = (hasOvers || isActive) && hasWickets;
+          const hasOvers = b.overs > 0;
+          
+          // Get the team_id of the current innings (batting team)
+          // The bowling team is the opposite team
+          const currentInningsTeamId = currentInningsScoreboard?.team_id;
+          const isFromBowlingTeam = !currentInningsTeamId || b.team_id !== currentInningsTeamId;
+          
+          // For current bowlers: must be from current innings, bowling team, and have overs
+          // CRITICAL: Only include if active=true OR (has overs AND from current innings)
+          // Don't include inactive bowlers from previous innings
+          const result = isFromCurrentInnings && isFromBowlingTeam && hasOvers && (isActive || (hasOvers && isFromCurrentInnings));
+          
           if (result) {
-            console.log('[Transformer] Found current bowler:', b.player_id, 'active:', b.active, 'overs:', b.overs, 'wickets:', b.wickets);
+            console.log('[Transformer] Found current bowler:', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'overs:', b.overs, 'wickets:', b.wickets);
           }
           return result;
         })
         .sort((a: any, b: any) => {
-          // Sort by active first, then by most recent (highest overs)
+          // Sort by active first (active bowlers come first), then by most recent (highest overs)
           if (a.active && !b.active) return -1;
           if (!a.active && b.active) return 1;
           return (b.overs || 0) - (a.overs || 0);
@@ -1247,44 +1413,143 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         return undefined;
       }
       
-      return currentBowlers.map((b: any) => {
-        const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
-        return {
-          playerId: b.player_id?.toString(),
-          playerName,
-          overs: parseFloat(b.overs?.toString() || '0') || 0,
-          maidens: b.maidens || 0,
-          runs: b.runs || 0,
-          wickets: b.wickets || 0,
-          economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
-          teamId: b.team_id?.toString(),
-          teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
-        };
-      });
+      return currentBowlers
+        .map((b: any) => {
+          // CRITICAL: Check multiple possible locations for player data from API
+          // API may return player data as: player, playerinfo, player_data, batsman (for batting), bowler (for bowling)
+          const playerName = extractPlayerName(
+            b.player || b.batsman || b.playerinfo || b.player_data || b.bowler, 
+            b.player_id
+          );
+          // CRITICAL: Only use API-provided values. Do not use fallbacks like || 0
+          return {
+            playerId: b.player_id?.toString(),
+            playerName, // May be undefined - will be filtered out
+            overs: b.overs !== undefined && b.overs !== null ? parseFloat(b.overs.toString()) : 0,
+            maidens: b.maidens !== undefined && b.maidens !== null ? b.maidens : 0,
+            runs: b.runs !== undefined && b.runs !== null ? b.runs : 0,
+            wickets: b.wickets !== undefined && b.wickets !== null ? b.wickets : 0,
+            // CRITICAL: Only use API-provided economy rate. Do not calculate locally.
+            economy: b.rate !== undefined && b.rate !== null ? b.rate : (b.overs && parseFloat(b.overs.toString()) > 0 ? (b.runs || 0) / parseFloat(b.overs.toString()) : 0),
+            teamId: b.team_id?.toString(),
+            teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
+          };
+        });
+      // NOTE: Filtering will be done AFTER enrichment in the service
     })(),
-    partnership: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting)
-      ? (() => {
-          const currentBatsmen = apiMatch.batting.filter((b: any) => b.active === true || (!b.batsmanout_id && (b.score > 0 || b.ball > 0)));
-          if (currentBatsmen.length >= 2) {
-            const totalRuns = currentBatsmen.reduce((sum: number, b: any) => sum + (b.score || 0), 0);
-            const totalBalls = currentBatsmen.reduce((sum: number, b: any) => sum + (b.ball || 0), 0);
-            const partnershipRR = totalBalls > 0 ? ((totalRuns / totalBalls) * 6).toFixed(2) : '0.00';
+    // CRITICAL: Only use API-provided partnership data. Never calculate locally.
+    // Check for partnership fields directly from API
+    partnership: (() => {
+      if (!isV2Format) return undefined;
+      
+      // Check if API provides partnership data directly
+      if (apiMatch.partnership) {
+        // API provides partnership object directly
+        const apiPartnership = apiMatch.partnership;
+        return {
+          runs: apiPartnership.runs !== undefined && apiPartnership.runs !== null ? apiPartnership.runs : undefined,
+          balls: apiPartnership.balls !== undefined && apiPartnership.balls !== null ? apiPartnership.balls : undefined,
+          runRate: apiPartnership.run_rate !== undefined && apiPartnership.run_rate !== null 
+            ? apiPartnership.run_rate.toString() 
+            : (apiPartnership.rate !== undefined && apiPartnership.rate !== null ? apiPartnership.rate.toString() : undefined),
+        };
+      }
+      
+      // Check for individual partnership fields
+      if (apiMatch.partnership_runs !== undefined || apiMatch.partnership_balls !== undefined) {
+        return {
+          runs: apiMatch.partnership_runs !== undefined && apiMatch.partnership_runs !== null ? apiMatch.partnership_runs : undefined,
+          balls: apiMatch.partnership_balls !== undefined && apiMatch.partnership_balls !== null ? apiMatch.partnership_balls : undefined,
+          runRate: apiMatch.partnership_rate !== undefined && apiMatch.partnership_rate !== null 
+            ? apiMatch.partnership_rate.toString() 
+            : undefined,
+        };
+      }
+      
+      // Check scoreboards for partnership data - check ALL scoreboards, not just 'total'
+      if (apiMatch.scoreboards && Array.isArray(apiMatch.scoreboards)) {
+        // First, try to find partnership in the current/active scoreboard (type === 'total')
+        let currentScoreboard = apiMatch.scoreboards.find((sb: any) => sb.type === 'total');
+        
+        // If not found, check all scoreboards
+        if (!currentScoreboard) {
+          currentScoreboard = apiMatch.scoreboards[apiMatch.scoreboards.length - 1]; // Use last scoreboard as fallback
+        }
+        
+        if (currentScoreboard) {
+          // Check for nested partnership object
+          if (currentScoreboard.partnership && typeof currentScoreboard.partnership === 'object') {
+            const p = currentScoreboard.partnership;
             return {
-              runs: totalRuns,
-              balls: totalBalls,
-              runRate: partnershipRR,
+              runs: p.runs !== undefined && p.runs !== null ? p.runs : undefined,
+              balls: p.balls !== undefined && p.balls !== null ? p.balls : undefined,
+              runRate: p.run_rate !== undefined && p.run_rate !== null 
+                ? p.run_rate.toString() 
+                : (p.rate !== undefined && p.rate !== null ? p.rate.toString() : undefined),
             };
           }
-          return undefined;
-        })()
-      : undefined,
+          
+          // Check for individual partnership fields in scoreboard
+          if (currentScoreboard.partnership_runs !== undefined || currentScoreboard.partnership_balls !== undefined) {
+            return {
+              runs: currentScoreboard.partnership_runs !== undefined && currentScoreboard.partnership_runs !== null 
+                ? currentScoreboard.partnership_runs 
+                : undefined,
+              balls: currentScoreboard.partnership_balls !== undefined && currentScoreboard.partnership_balls !== null 
+                ? currentScoreboard.partnership_balls 
+                : undefined,
+              runRate: currentScoreboard.partnership_rate !== undefined && currentScoreboard.partnership_rate !== null 
+                ? currentScoreboard.partnership_rate.toString() 
+                : undefined,
+            };
+          }
+          
+          // Log what we found in scoreboard for debugging
+          const sbKeys = Object.keys(currentScoreboard);
+          const partnershipKeys = sbKeys.filter(k => k.toLowerCase().includes('partnership') || k.toLowerCase().includes('part'));
+          if (partnershipKeys.length > 0) {
+            console.log(`[Transformer] Found partnership keys in scoreboard: ${partnershipKeys.join(', ')}`);
+          }
+        }
+        
+        // Also check all scoreboards for any partnership data
+        for (const sb of apiMatch.scoreboards) {
+          const sbKeys = Object.keys(sb);
+          const partnershipKeys = sbKeys.filter(k => k.toLowerCase().includes('partnership') || k.toLowerCase().includes('part'));
+          if (partnershipKeys.length > 0) {
+            console.log(`[Transformer] Scoreboard ${sb.type || 'unknown'} has partnership keys: ${partnershipKeys.join(', ')}`);
+            partnershipKeys.forEach(key => {
+              console.log(`[Transformer] ${key}: ${JSON.stringify(sb[key])}`);
+            });
+          }
+        }
+      }
+      
+      // CRITICAL: If API doesn't provide partnership data, return undefined
+      // Do NOT calculate locally (e.g., by summing current batters' scores)
+      return undefined;
+    })(),
     lastWicket: isV2Format && apiMatch.batting && Array.isArray(apiMatch.batting)
       ? (() => {
+          // CRITICAL: Use ALL API fields to determine if player is out - not just batsmanout_id
           const lastOut = apiMatch.batting
-            .filter((b: any) => b.batsmanout_id && b.fow_score !== undefined)
+            .filter((b: any) => {
+              const hasBatsmanoutId = b.batsmanout_id !== undefined && b.batsmanout_id !== null && b.batsmanout_id !== 0;
+              const hasCatchStump = b.catch_stump_player_id !== undefined && b.catch_stump_player_id !== null && b.catch_stump_player_id !== 0;
+              const hasRunout = b.runout_by_id !== undefined && b.runout_by_id !== null && b.runout_by_id !== 0;
+              return (hasBatsmanoutId || hasCatchStump || hasRunout) && b.fow_score !== undefined;
+            })
             .sort((a: any, b: any) => (b.fow_score || 0) - (a.fow_score || 0))[0];
           if (lastOut) {
-            const playerName = extractPlayerName(lastOut.player || lastOut.playerinfo || lastOut.player_data, lastOut.player_id);
+            // CRITICAL: Check multiple possible locations for player data from API
+            const playerName = extractPlayerName(
+              lastOut.player || lastOut.batsman || lastOut.playerinfo || lastOut.player_data, 
+              lastOut.player_id
+            );
+            // Only return lastWicket if player name is available (no placeholders)
+            if (!playerName) {
+              return undefined;
+            }
             return {
               playerId: lastOut.player_id?.toString(),
               playerName,
@@ -1340,26 +1605,63 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       return battingData
         .filter((b: any) => b.score !== undefined && b.score !== null && (b.score > 0 || b.ball > 0))
         .map((b: any) => {
-          // Player name - try to get from included player data, otherwise use player_id
-          const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
+          // Player name - try to get from included player data
+          // Check multiple possible locations for player data (including batsman field from API)
+          const playerData = b.player || b.batsman || b.playerinfo || b.player_data || b.player_data?.data;
+          
+          // Log for debugging
+          if (b.player_id) {
+            if (b.batsman) {
+              console.log(`[Transformer] Batting player ${b.player_id} has batsman field with fullname: ${b.batsman.fullname || 'N/A'}`);
+            } else if (!playerData) {
+              console.warn(`[Transformer] No player data for batting player_id=${b.player_id}, keys:`, Object.keys(b));
+            }
+          }
+          
+          // CRITICAL: Check multiple possible locations for player data from API
+          // API may return player data as: player, batsman, playerinfo, player_data
+          const playerName = extractPlayerName(playerData, b.player_id);
+          
+          if (b.player_id && !playerName && playerData) {
+            console.warn(`[Transformer] Failed to extract name from playerData for batting player_id=${b.player_id}, playerData keys:`, Object.keys(playerData || {}));
+          }
+          
+          // CRITICAL: isOut should be determined from ALL API fields that indicate dismissal
+          // API may indicate dismissal through multiple fields - check ALL of them:
+          // 1. batsmanout_id - primary indicator
+          // 2. catch_stump_player_id - indicates caught or stumped
+          // 3. runout_by_id - indicates run out
+          // 4. wicket_id - indicates a wicket was taken (if present and batsmanout_id is null, might still be out)
+          // Player is OUT if ANY of these fields indicate dismissal
+          const hasBatsmanoutId = b.batsmanout_id !== undefined && b.batsmanout_id !== null && b.batsmanout_id !== 0;
+          const hasCatchStump = b.catch_stump_player_id !== undefined && b.catch_stump_player_id !== null && b.catch_stump_player_id !== 0;
+          const hasRunout = b.runout_by_id !== undefined && b.runout_by_id !== null && b.runout_by_id !== 0;
+          const hasWicketId = b.wicket_id !== undefined && b.wicket_id !== null && b.wicket_id !== 0;
+          
+          // If player has a wicket_id but no batsmanout_id, they might still be out (check if they're in a completed innings)
+          // For completed innings, if a player has wicket_id and is not in current innings, they're likely out
+          const isOut = hasBatsmanoutId || hasCatchStump || hasRunout || (hasWicketId && !b.active);
           
           return {
             playerId: b.player_id?.toString(),
-            playerName,
-            runs: b.score || 0,
-            balls: b.ball || 0,
-            fours: b.four_x || 0,
-            sixes: b.six_x || 0,
-            strikeRate: b.rate || (b.ball > 0 ? ((b.score || 0) / b.ball) * 100 : 0),
-            isOut: !!b.batsmanout_id,
+            playerName, // May be undefined if API doesn't provide it
+            // CRITICAL: Only use API-provided values. Do not use fallbacks like || 0
+            runs: b.score !== undefined && b.score !== null ? b.score : undefined,
+            balls: b.ball !== undefined && b.ball !== null ? b.ball : undefined,
+            fours: b.four_x !== undefined && b.four_x !== null ? b.four_x : undefined,
+            sixes: b.six_x !== undefined && b.six_x !== null ? b.six_x : undefined,
+            // CRITICAL: Only use API-provided strike rate. Do not calculate locally.
+            strikeRate: b.rate !== undefined && b.rate !== null ? b.rate : undefined,
+            isOut,
             dismissedBy: b.bowling_player_id?.toString(),
             teamId: b.team_id?.toString(),
             teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
-            fowScore: b.fow_score || undefined,
-            fowBalls: b.fow_balls || undefined,
+            fowScore: b.fow_score !== undefined && b.fow_score !== null ? b.fow_score : undefined,
+            fowBalls: b.fow_balls !== undefined && b.fow_balls !== null ? b.fow_balls : undefined,
           };
         })
         .sort((a: any, b: any) => b.runs - a.runs); // Sort by runs descending
+      // NOTE: Filtering will be done AFTER enrichment in the service
     })(),
     bowling: (() => {
       if (!isV2Format) return undefined;
@@ -1401,22 +1703,43 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       return bowlingData
         .filter((b: any) => (b.overs || b.wickets) && (b.overs > 0 || b.wickets > 0))
         .map((b: any) => {
-          // Player name - try to get from included player data, otherwise use player_id
-          const playerName = extractPlayerName(b.player || b.playerinfo || b.player_data, b.player_id);
+          // Player name - try to get from included player data
+          // Check multiple possible locations for player data (including bowler field from API)
+          const playerData = b.player || b.bowler || b.playerinfo || b.player_data || b.player_data?.data;
+          
+          // Log for debugging
+          if (b.player_id) {
+            if (b.bowler) {
+              console.log(`[Transformer] Bowling player ${b.player_id} has bowler field with fullname: ${b.bowler.fullname || 'N/A'}`);
+            } else if (!playerData) {
+              console.warn(`[Transformer] No player data for bowling player_id=${b.player_id}, keys:`, Object.keys(b));
+            }
+          }
+          
+          // CRITICAL: Check multiple possible locations for player data from API
+          // API may return player data as: player, bowler, playerinfo, player_data
+          const playerName = extractPlayerName(playerData, b.player_id);
+          
+          if (b.player_id && !playerName && playerData) {
+            console.warn(`[Transformer] Failed to extract name from playerData for bowling player_id=${b.player_id}, playerData keys:`, Object.keys(playerData || {}));
+          }
           
           return {
             playerId: b.player_id?.toString(),
-            playerName,
-            overs: parseFloat(b.overs?.toString() || '0') || 0,
-            maidens: b.maidens || 0,
-            runs: b.runs || 0,
-            wickets: b.wickets || 0,
-            economy: b.rate || (parseFloat(b.overs?.toString() || '0') > 0 ? (b.runs || 0) / parseFloat(b.overs?.toString() || '1') : 0),
+            playerName, // May be undefined if API doesn't provide it - will be filtered out
+            // CRITICAL: Only use API-provided values. Do not use fallbacks like || 0
+            overs: b.overs !== undefined && b.overs !== null ? parseFloat(b.overs.toString()) : undefined,
+            maidens: b.maidens !== undefined && b.maidens !== null ? b.maidens : undefined,
+            runs: b.runs !== undefined && b.runs !== null ? b.runs : undefined,
+            wickets: b.wickets !== undefined && b.wickets !== null ? b.wickets : undefined,
+            // CRITICAL: Only use API-provided economy rate. Do not calculate locally.
+            economy: b.rate !== undefined && b.rate !== null ? b.rate : undefined,
             teamId: b.team_id?.toString(),
             teamName: b.team_id === apiMatch.localteam_id ? teams.home.name : teams.away.name,
           };
         })
         .sort((a: any, b: any) => b.wickets - a.wickets || a.economy - b.economy); // Sort by wickets, then economy
+      // NOTE: Filtering will be done AFTER enrichment in the service
     })(),
   };
 }

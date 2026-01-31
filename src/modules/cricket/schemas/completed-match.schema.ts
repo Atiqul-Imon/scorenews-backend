@@ -62,6 +62,13 @@ export class CompletedMatch {
   @Prop({ required: true, index: true })
   endTime: Date;
 
+  @Prop({
+    enum: ['completed'],
+    default: 'completed',
+    index: true,
+  })
+  status?: 'completed';
+
   // COMPLETED-SPECIFIC FIELDS
   @Prop({
     type: {
@@ -137,7 +144,7 @@ export class CompletedMatch {
     type: [
       {
         playerId: { type: String },
-        playerName: { type: String, required: true },
+        playerName: { type: String }, // Made optional - API may not provide names
         runs: { type: Number, default: 0 },
         balls: { type: Number, default: 0 },
         fours: { type: Number, default: 0 },
@@ -172,7 +179,7 @@ export class CompletedMatch {
     type: [
       {
         playerId: { type: String },
-        playerName: { type: String, required: true },
+        playerName: { type: String }, // Made optional - API may not provide names
         overs: { type: Number, default: 0 },
         maidens: { type: Number, default: 0 },
         runs: { type: Number, default: 0 },

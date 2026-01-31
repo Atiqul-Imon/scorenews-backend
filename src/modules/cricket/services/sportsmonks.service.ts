@@ -38,8 +38,10 @@ export class SportsMonksService {
       this.logger.log(`Fetching live matches from ${endpoint}`, 'SportsMonksService');
       
       // Use include parameters for v2.0 API
-      // NOTE: The include parameter may not always return nested data in livescores endpoint
-      // We'll handle missing nested data in the transformer
+      // NOTE: The /livescores endpoint has very limited allowed includes
+      // Even basic batting/bowling might not be allowed - use only core includes
+      // We'll fetch full match details later using getMatchDetails() to get complete player data
+      // For /livescores, use only the most basic includes that are definitely allowed
       const includeParam = sport === 'cricket' 
         ? 'scoreboards,localteam,visitorteam,venue' 
         : 'scores,participants';
@@ -88,38 +90,30 @@ export class SportsMonksService {
       this.logger.log(`Live scores endpoint returned ${matches.length} matches (after parsing)`, 'SportsMonksService');
       
       if (matches.length > 0) {
-        // Log detailed structure of first match to verify API response format
+        // Log COMPLETE structure of first match to see ALL available fields
         const firstMatch = matches[0];
-        this.logger.log(`=== SPORTSMONKS V2 API RESPONSE STRUCTURE ===`, 'SportsMonksService');
-        this.logger.log(`First match structure: ${JSON.stringify({
-          id: firstMatch.id,
-          name: firstMatch.name,
-          state_id: firstMatch.state_id,
-          status: firstMatch.status,
-          starting_at: firstMatch.starting_at,
-          localteam_id: firstMatch.localteam_id,
-          visitorteam_id: firstMatch.visitorteam_id,
-          has_localteam: !!firstMatch.localteam,
-          has_visitorteam: !!firstMatch.visitorteam,
-          localteam_name: firstMatch.localteam?.name,
-          visitorteam_name: firstMatch.visitorteam?.name,
-          scoreboards_count: firstMatch.scoreboards?.length || 0,
-          has_venue: !!firstMatch.venue,
-          venue_name: firstMatch.venue?.name,
-          note: firstMatch.note,
-          live: firstMatch.live,
-        }, null, 2)}`, 'SportsMonksService');
+        this.logger.log(`=== COMPLETE SPORTSMONKS V2 API RESPONSE STRUCTURE ===`, 'SportsMonksService');
+        this.logger.log(`All top-level keys in match object: ${JSON.stringify(Object.keys(firstMatch))}`, 'SportsMonksService');
+        this.logger.log(`Complete first match structure: ${JSON.stringify(firstMatch, null, 2)}`, 'SportsMonksService');
         
-        // Log scoreboards structure if available
+        // Log nested structures in detail
+        if (firstMatch.localteam) {
+          this.logger.log(`Local team structure: ${JSON.stringify(firstMatch.localteam, null, 2)}`, 'SportsMonksService');
+        }
+        if (firstMatch.visitorteam) {
+          this.logger.log(`Visitor team structure: ${JSON.stringify(firstMatch.visitorteam, null, 2)}`, 'SportsMonksService');
+        }
+        if (firstMatch.venue) {
+          this.logger.log(`Venue structure: ${JSON.stringify(firstMatch.venue, null, 2)}`, 'SportsMonksService');
+        }
         if (firstMatch.scoreboards && firstMatch.scoreboards.length > 0) {
-          this.logger.log(`Scoreboards structure: ${JSON.stringify(firstMatch.scoreboards.slice(0, 2).map((s: any) => ({
-            scoreboard: s.scoreboard,
-            team_id: s.team_id,
-            type: s.type,
-            total: s.total,
-            wickets: s.wickets,
-            overs: s.overs,
-          })), null, 2)}`, 'SportsMonksService');
+          this.logger.log(`Complete scoreboards structure: ${JSON.stringify(firstMatch.scoreboards, null, 2)}`, 'SportsMonksService');
+        }
+        if (firstMatch.league) {
+          this.logger.log(`League structure: ${JSON.stringify(firstMatch.league, null, 2)}`, 'SportsMonksService');
+        }
+        if (firstMatch.season) {
+          this.logger.log(`Season structure: ${JSON.stringify(firstMatch.season, null, 2)}`, 'SportsMonksService');
         }
         
         const sample = matches.slice(0, 3).map((m: any) => ({
@@ -164,10 +158,12 @@ export class SportsMonksService {
     try {
       // No caching - always fetch fresh data
       const baseUrl = this.getBaseUrl(sport);
-      const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam,venue' : 'scores,participants';
+      // Include player data for batting/bowling to get real player names
+      const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam,venue,batting.player,bowling.player' : 'scores,participants';
       
-      // For v2.0 API, use the scores/results endpoint for completed matches
-      // This is separate from the livescores endpoint
+      // For v2.0 API, use the fixtures endpoint for completed matches
+      // NOTE: The /scores endpoint does not exist in SportsMonks v2.0 API
+      // We use /fixtures endpoint and filter for completed matches (state_id = 5 or 6)
       let allMatches: any[] = [];
       
       // Calculate date range for last 7 days
@@ -176,64 +172,45 @@ export class SportsMonksService {
       const currentYear = now.getFullYear();
       
       try {
-        // Try scores endpoint first (for completed matches with results)
-        this.logger.log(`Calling SportMonks API: ${baseUrl}/scores`, 'SportsMonksService');
-        try {
-          const scoresResponse = await firstValueFrom(
-            this.httpService.get(`${baseUrl}/scores`, {
-              params: {
-                api_token: this.apiToken,
-                include: includeParam,
-                per_page: 250,
-              },
-            }),
-          );
-          
-          allMatches = scoresResponse.data?.data || [];
-          this.logger.log(`Scores endpoint returned ${allMatches.length} matches`, 'SportsMonksService');
-        } catch (scoresError: any) {
-          // If scores endpoint doesn't exist or fails, fall back to fixtures endpoint
-          this.logger.warn(`Scores endpoint failed (${scoresError.response?.status || 'unknown'}), using fixtures endpoint as fallback`, 'SportsMonksService');
-          
-          this.logger.log(`Calling SportMonks API: ${baseUrl}/fixtures`, 'SportsMonksService');
-          const response = await firstValueFrom(
-            this.httpService.get(`${baseUrl}/fixtures`, {
-              params: {
-                api_token: this.apiToken,
-                include: includeParam,
-                per_page: 250,
-              },
-            }),
-          );
+        // Use fixtures endpoint (scores endpoint doesn't exist in v2.0)
+        this.logger.log(`Calling SportMonks API: ${baseUrl}/fixtures`, 'SportsMonksService');
+        const response = await firstValueFrom(
+          this.httpService.get(`${baseUrl}/fixtures`, {
+            params: {
+              api_token: this.apiToken,
+              include: includeParam,
+              per_page: 250,
+            },
+          }),
+        );
+      
+        // Log full response structure for debugging
+        this.logger.log(`API Response keys: ${JSON.stringify(Object.keys(response.data || {}))}`, 'SportsMonksService');
         
-          // Log full response structure for debugging
-          this.logger.log(`API Response keys: ${JSON.stringify(Object.keys(response.data || {}))}`, 'SportsMonksService');
+        allMatches = response.data?.data || [];
+        this.logger.log(`Fixtures endpoint returned ${allMatches.length} total matches`, 'SportsMonksService');
+        
+        // Log response structure
+        if (allMatches.length === 0) {
+          this.logger.warn(`No matches returned. Full response: ${JSON.stringify(response.data, null, 2)}`, 'SportsMonksService');
+        } else {
+          // Log sample matches to see what we're getting
+          const sample = allMatches.slice(0, 5).map((m: any) => ({
+            id: m.id,
+            date: m.starting_at,
+            state_id: m.state_id,
+            name: m.name || `${m.localteam?.name || 'T1'} vs ${m.visitorteam?.name || 'T2'}`,
+            league: m.league?.name || m.season?.name || 'Unknown',
+          }));
+          this.logger.log(`Sample matches from API: ${JSON.stringify(sample, null, 2)}`, 'SportsMonksService');
           
-          allMatches = response.data?.data || [];
-          this.logger.log(`Regular fixtures endpoint returned ${allMatches.length} total matches`, 'SportsMonksService');
-          
-          // Log response structure
-          if (allMatches.length === 0) {
-            this.logger.warn(`No matches returned. Full response: ${JSON.stringify(response.data, null, 2)}`, 'SportsMonksService');
-          } else {
-            // Log sample matches to see what we're getting
-            const sample = allMatches.slice(0, 5).map((m: any) => ({
-              id: m.id,
-              date: m.starting_at,
-              state_id: m.state_id,
-              name: m.name || `${m.localteam?.name || 'T1'} vs ${m.visitorteam?.name || 'T2'}`,
-              league: m.league?.name || m.season?.name || 'Unknown',
-            }));
-            this.logger.log(`Sample matches from API: ${JSON.stringify(sample, null, 2)}`, 'SportsMonksService');
-            
-            // Log state_id distribution
-            const stateIds = allMatches.map((m: any) => m.state_id).filter((id: any) => id !== undefined);
-            const stateIdCounts = stateIds.reduce((acc: any, id: any) => {
-              acc[id] = (acc[id] || 0) + 1;
-              return acc;
-            }, {});
-            this.logger.log(`State ID distribution: ${JSON.stringify(stateIdCounts)}`, 'SportsMonksService');
-          }
+          // Log state_id distribution
+          const stateIds = allMatches.map((m: any) => m.state_id).filter((id: any) => id !== undefined);
+          const stateIdCounts = stateIds.reduce((acc: any, id: any) => {
+            acc[id] = (acc[id] || 0) + 1;
+            return acc;
+          }, {});
+          this.logger.log(`State ID distribution: ${JSON.stringify(stateIdCounts)}`, 'SportsMonksService');
         }
       } catch (error: any) {
         this.logger.error(
@@ -353,20 +330,105 @@ export class SportsMonksService {
       // Include batting and bowling for detailed match statistics
       // For SportMonks v2.0 cricket API, use simpler include format
       // v2.0 supports: scoreboards (which includes batting/bowling), batting, bowling separately
-      // Player data is included automatically when requesting batting/bowling
-      const includeParam = sport === 'cricket' 
-        ? 'localteam,visitorteam,scoreboards,batting,bowling,venue,league,season' 
+      // Try to include batting/bowling data with player details
+      // NOTE: The /fixtures/{id} endpoint may reject certain include parameters
+      // Strategy: Try nested includes first, then batting/bowling without .player, then simpler includes
+      let match: any = null;
+      let response: any = null;
+      
+      // Try 1: Include batting.batsman,bowling.bowler (v2.0 API uses batsman/bowler, not player)
+      // According to v2.0 API docs, the correct includes are batting.batsman and bowling.bowler
+      let includeParam = sport === 'cricket' 
+        ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
         : 'scores,participants,lineups,events';
-      const response = await firstValueFrom(
-        this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
-          params: {
-            api_token: this.apiToken,
-            include: includeParam,
-          },
-        }),
-      );
-
-      const match = response.data?.data;
+      
+      try {
+        response = await firstValueFrom(
+          this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
+            params: {
+              api_token: this.apiToken,
+              include: includeParam,
+            },
+          }),
+        );
+        match = response.data?.data;
+        this.logger.log(`[Match ${matchId}] Successfully fetched with nested player includes`, 'SportsMonksService');
+      } catch (firstError: any) {
+        // If 400 error, try without nested .player includes
+        if (firstError.response?.status === 400) {
+          this.logger.warn(`[Match ${matchId}] 400 error with nested includes: ${includeParam}, trying batting.batsman/bowling.bowler...`, 'SportsMonksService');
+          
+          // Try 2: Include batting.batsman,bowling.bowler (v2.0 API format)
+          const battingBowlingInclude = sport === 'cricket' 
+            ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
+            : 'scores,participants,lineups,events';
+          
+          try {
+            response = await firstValueFrom(
+              this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
+                params: {
+                  api_token: this.apiToken,
+                  include: battingBowlingInclude,
+                },
+              }),
+            );
+            match = response.data?.data;
+            this.logger.log(`[Match ${matchId}] Successfully fetched with batting.batsman/bowling.bowler includes`, 'SportsMonksService');
+          } catch (secondError: any) {
+            // If that also fails, try with batting/bowling without any nested includes
+            if (secondError.response?.status === 400) {
+              this.logger.warn(`[Match ${matchId}] 400 error with batting.batsman/bowling.bowler includes, trying batting/bowling without nested includes...`, 'SportsMonksService');
+              
+              // Try 3: Include batting,bowling (without any nested includes)
+              const simpleBattingBowlingInclude = sport === 'cricket' 
+                ? 'localteam,visitorteam,scoreboards,batting,bowling,venue,league,season' 
+                : 'scores,participants,lineups,events';
+          
+              try {
+                response = await firstValueFrom(
+                  this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
+                    params: {
+                      api_token: this.apiToken,
+                      include: simpleBattingBowlingInclude,
+                    },
+                  }),
+                );
+                match = response.data?.data;
+                this.logger.log(`[Match ${matchId}] Successfully fetched with batting/bowling (without nested includes)`, 'SportsMonksService');
+              } catch (thirdError: any) {
+                // If that also fails, try with simplest includes (no batting/bowling)
+                if (thirdError.response?.status === 400) {
+                  this.logger.warn(`[Match ${matchId}] 400 error with batting/bowling includes, trying simplest includes...`, 'SportsMonksService');
+                  const simpleIncludeParam = sport === 'cricket' 
+                    ? 'localteam,visitorteam,scoreboards,venue' 
+                    : 'scores,participants';
+                  try {
+                    response = await firstValueFrom(
+                      this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
+                        params: {
+                          api_token: this.apiToken,
+                          include: simpleIncludeParam,
+                        },
+                      }),
+                    );
+                    match = response.data?.data;
+                    this.logger.log(`[Match ${matchId}] Successfully fetched with simplest includes (no batting/bowling)`, 'SportsMonksService');
+                  } catch (fourthError: any) {
+                    this.logger.error(`[Match ${matchId}] All retry attempts failed. Last error: ${fourthError.response?.status} - ${JSON.stringify(fourthError.response?.data || {})}`, '', 'SportsMonksService');
+                    throw firstError; // Throw original error
+                  }
+                } else {
+                  throw thirdError;
+                }
+              }
+            } else {
+              throw secondError;
+            }
+          }
+        } else {
+          throw firstError;
+        }
+      }
       
       // Check if match data exists
       if (!match) {
@@ -374,35 +436,80 @@ export class SportsMonksService {
         throw new Error(`Match ${matchId} not found in SportMonks API`);
       }
       
-      // Log the structure to debug batting/bowling data
+      // Log COMPLETE structure to see ALL available fields from API
       if (sport === 'cricket') {
-        this.logger.log(`[Match ${matchId}] Raw API response keys: ${Object.keys(match).join(', ')}`, 'SportsMonksService');
+        this.logger.log(`[Match ${matchId}] === COMPLETE API RESPONSE STRUCTURE ===`, 'SportsMonksService');
+        this.logger.log(`[Match ${matchId}] All top-level keys: ${Object.keys(match).join(', ')}`, 'SportsMonksService');
+        
+        // Log if batting/bowling exist and their structure
         this.logger.log(`[Match ${matchId}] Has batting: ${!!match.batting}, Type: ${Array.isArray(match.batting) ? 'array' : typeof match.batting}, Length: ${Array.isArray(match.batting) ? match.batting.length : 'N/A'}`, 'SportsMonksService');
         this.logger.log(`[Match ${matchId}] Has bowling: ${!!match.bowling}, Type: ${Array.isArray(match.bowling) ? 'array' : typeof match.bowling}, Length: ${Array.isArray(match.bowling) ? match.bowling.length : 'N/A'}`, 'SportsMonksService');
-        this.logger.log(`[Match ${matchId}] Has scoreboards: ${!!match.scoreboards}, Count: ${match.scoreboards?.length || 0}`, 'SportsMonksService');
+        
+        // Log scoreboards structure - check if they contain batting/bowling and partnership
         if (match.scoreboards && match.scoreboards.length > 0) {
+          this.logger.log(`[Match ${matchId}] Scoreboards count: ${match.scoreboards.length}`, 'SportsMonksService');
           match.scoreboards.forEach((sb: any, idx: number) => {
-            this.logger.log(`[Match ${matchId}] Scoreboard ${idx} keys: ${Object.keys(sb || {}).join(', ')}`, 'SportsMonksService');
+            const sbKeys = Object.keys(sb);
+            this.logger.log(`[Match ${matchId}] Scoreboard ${idx} keys: ${sbKeys.join(', ')}`, 'SportsMonksService');
             if (sb.batting) {
               this.logger.log(`[Match ${matchId}] Scoreboard ${idx} has batting: ${Array.isArray(sb.batting) ? sb.batting.length : 'not array'} records`, 'SportsMonksService');
-              if (Array.isArray(sb.batting) && sb.batting.length > 0) {
-                this.logger.log(`[Match ${matchId}] Sample batting record keys: ${Object.keys(sb.batting[0] || {}).join(', ')}`, 'SportsMonksService');
-              }
             }
             if (sb.bowling) {
               this.logger.log(`[Match ${matchId}] Scoreboard ${idx} has bowling: ${Array.isArray(sb.bowling) ? sb.bowling.length : 'not array'} records`, 'SportsMonksService');
-              if (Array.isArray(sb.bowling) && sb.bowling.length > 0) {
-                this.logger.log(`[Match ${matchId}] Sample bowling record keys: ${Object.keys(sb.bowling[0] || {}).join(', ')}`, 'SportsMonksService');
-              }
+            }
+            // Check for partnership in scoreboard
+            const partnershipKeys = sbKeys.filter(k => k.toLowerCase().includes('partnership') || k.toLowerCase().includes('part'));
+            if (partnershipKeys.length > 0) {
+              this.logger.log(`[Match ${matchId}] Scoreboard ${idx} has partnership-related keys: ${partnershipKeys.join(', ')}`, 'SportsMonksService');
+              partnershipKeys.forEach(key => {
+                this.logger.log(`[Match ${matchId}] Scoreboard ${idx} ${key}: ${JSON.stringify(sb[key])}`, 'SportsMonksService');
+              });
+            }
+            // Log full scoreboard for current innings (type === 'total')
+            if (sb.type === 'total') {
+              this.logger.log(`[Match ${matchId}] Scoreboard ${idx} (current innings) full data: ${JSON.stringify(sb, null, 2)}`, 'SportsMonksService');
             }
           });
         }
+        
         // Log sample batting/bowling data if available at root
         if (Array.isArray(match.batting) && match.batting.length > 0) {
-          this.logger.log(`[Match ${matchId}] Root batting sample: ${JSON.stringify(match.batting[0])}`, 'SportsMonksService');
+          const sampleBatting = match.batting[0];
+          this.logger.log(`[Match ${matchId}] Root batting sample keys: ${Object.keys(sampleBatting).join(', ')}`, 'SportsMonksService');
+          this.logger.log(`[Match ${matchId}] Root batting sample: ${JSON.stringify(sampleBatting, null, 2)}`, 'SportsMonksService');
+          // Check if player/batsman data is nested
+          if (sampleBatting.batsman) {
+            this.logger.log(`[Match ${matchId}] Batting record has batsman field: ${JSON.stringify(sampleBatting.batsman, null, 2)}`, 'SportsMonksService');
+          }
+          if (sampleBatting.player) {
+            this.logger.log(`[Match ${matchId}] Batting record has player field: ${JSON.stringify(sampleBatting.player, null, 2)}`, 'SportsMonksService');
+          }
         }
         if (Array.isArray(match.bowling) && match.bowling.length > 0) {
-          this.logger.log(`[Match ${matchId}] Root bowling sample: ${JSON.stringify(match.bowling[0])}`, 'SportsMonksService');
+          const sampleBowling = match.bowling[0];
+          this.logger.log(`[Match ${matchId}] Root bowling sample keys: ${Object.keys(sampleBowling).join(', ')}`, 'SportsMonksService');
+          this.logger.log(`[Match ${matchId}] Root bowling sample: ${JSON.stringify(sampleBowling, null, 2)}`, 'SportsMonksService');
+          // Check if player/bowler data is nested
+          if (sampleBowling.bowler) {
+            this.logger.log(`[Match ${matchId}] Bowling record has bowler field: ${JSON.stringify(sampleBowling.bowler, null, 2)}`, 'SportsMonksService');
+          }
+          if (sampleBowling.player) {
+            this.logger.log(`[Match ${matchId}] Bowling record has player field: ${JSON.stringify(sampleBowling.player, null, 2)}`, 'SportsMonksService');
+          }
+        }
+        
+        // Check for partnership-related fields in API response
+        const partnershipFields = ['partnership', 'current_partnership', 'partnership_runs', 'partnership_balls', 'partnership_rate'];
+        const hasPartnershipField = partnershipFields.some(field => match[field] !== undefined);
+        if (hasPartnershipField) {
+          this.logger.log(`[Match ${matchId}] Found partnership fields: ${partnershipFields.filter(f => match[f] !== undefined).join(', ')}`, 'SportsMonksService');
+          partnershipFields.forEach(field => {
+            if (match[field] !== undefined) {
+              this.logger.log(`[Match ${matchId}] ${field}: ${JSON.stringify(match[field])}`, 'SportsMonksService');
+            }
+          });
+        } else {
+          this.logger.log(`[Match ${matchId}] No partnership fields found in API response`, 'SportsMonksService');
         }
       }
       
@@ -413,6 +520,10 @@ export class SportsMonksService {
       if (error.response?.status === 404 || error.message?.includes('not found')) {
         this.logger.warn(`Match ${matchId} not found in SportMonks API`, 'SportsMonksService');
         throw new Error(`Match ${matchId} not found`);
+      }
+      // Log 400 errors with more detail
+      if (error.response?.status === 400) {
+        this.logger.error(`[Match ${matchId}] 400 Bad Request - Error response: ${JSON.stringify(error.response?.data || {})}`, '', 'SportsMonksService');
       }
       this.logger.error(`Error fetching ${sport} match details for ${matchId}`, error.stack, 'SportsMonksService');
       throw error;
@@ -442,7 +553,7 @@ export class SportsMonksService {
     }
   }
 
-  async getCommentary(matchId: string, sport: Sport = 'cricket'): Promise<any[]> {
+  async getCommentary(matchId: string, sport: Sport = 'cricket'): Promise<{ firstInnings: any[]; secondInnings: any[]; all: any[] }> {
     try {
       // No caching - always fetch fresh data
       const baseUrl = this.getBaseUrl(sport);
@@ -451,8 +562,13 @@ export class SportsMonksService {
       // Balls contain ball-by-ball data which can be used as commentary
       this.logger.log(`Fetching ball-by-ball data (commentary) for match ${matchId}`, 'SportsMonksService');
       
+      // Try different include combinations - balls.scoreboard is not a valid include
+      let balls: any[] = [];
+      let response: any = null;
+      
+      // First try: with all available includes
       try {
-        const response = await firstValueFrom(
+        response = await firstValueFrom(
           this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
             params: {
               api_token: this.apiToken,
@@ -460,17 +576,72 @@ export class SportsMonksService {
             },
           }),
         );
-
-        const balls = response.data?.data?.balls || [];
+        balls = response.data?.data?.balls || [];
+      } catch (error: any) {
+        // If first attempt fails, try simpler includes
+        if (error.response?.status === 400) {
+          this.logger.warn(`First attempt failed, trying simpler includes for commentary`, 'SportsMonksService');
+          try {
+            response = await firstValueFrom(
+              this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
+                params: {
+                  api_token: this.apiToken,
+                  include: 'balls',
+                },
+              }),
+            );
+            balls = response.data?.data?.balls || [];
+          } catch (retryError: any) {
+            throw retryError; // Re-throw if retry also fails
+          }
+        } else {
+          throw error; // Re-throw if it's not a 400 error
+        }
+      }
         
+      if (balls.length > 0) {
+        this.logger.log(`Found ${balls.length} ball-by-ball entries for commentary`, 'SportsMonksService');
+        
+        // Log sample ball structure to see what fields are available
         if (balls.length > 0) {
-          this.logger.log(`Found ${balls.length} ball-by-ball entries for commentary`, 'SportsMonksService');
-          // Transform balls into commentary format
-          return balls.map((ball: any, index: number) => ({
+          const sampleBall = balls[0];
+          this.logger.log(`[Match ${matchId}] Sample ball keys: ${Object.keys(sampleBall).join(', ')}`, 'SportsMonksService');
+          if (sampleBall.scoreboard) {
+            this.logger.log(`[Match ${matchId}] Sample ball has scoreboard field: ${sampleBall.scoreboard}`, 'SportsMonksService');
+          }
+        }
+        
+        // Group balls by scoreboard (S1 = first innings, S2 = second innings)
+        const commentaryByInnings: { [key: string]: any[] } = {};
+        
+        balls.forEach((ball: any, index: number) => {
+          // Get scoreboard identifier (S1, S2, etc.) - this identifies the innings
+          // The scoreboard field should be directly on the ball object
+          const scoreboard = ball.scoreboard || ball.scoreboard_id || 'S1'; // Default to S1 if not available
+          const inningsKey = scoreboard.toString();
+          
+          // Parse over and ball number from ball.ball (which is a decimal like 19.6 = over 19, ball 6)
+          let over = 0;
+          let ballNumber = 0;
+          
+          if (ball.ball !== undefined && ball.ball !== null) {
+            const ballValue = parseFloat(ball.ball.toString());
+            if (!isNaN(ballValue)) {
+              over = Math.floor(ballValue); // Integer part is the over
+              ballNumber = Math.round((ballValue - over) * 10); // Decimal part * 10 is the ball number
+            }
+          }
+          
+          // If ball.over is provided separately, use it (but it might be 0 or undefined)
+          if (ball.over !== undefined && ball.over !== null && ball.over > 0) {
+            over = Math.floor(parseFloat(ball.over.toString()));
+          }
+          
+          const commentaryEntry = {
             id: ball.id || index,
-            over: ball.over || 0,
+            over: over,
             ball: ball.ball || 0,
-            ballNumber: ball.ball || 0,
+            ballNumber: ballNumber,
             runs: ball.score?.runs || 0,
             wickets: ball.score?.wickets || 0,
             isWicket: ball.batsmanout !== null || ball.catchstump !== null,
@@ -478,21 +649,51 @@ export class SportsMonksService {
             bowler: ball.bowler?.name || ball.bowler?.fullname || '',
             commentary: this.generateCommentaryText(ball),
             timestamp: ball.updated_at || ball.created_at || new Date().toISOString(),
-          }));
-        } else {
-          this.logger.warn(`No ball-by-ball data available for match ${matchId}`, 'SportsMonksService');
-          return [];
-        }
-      } catch (error: any) {
-        this.logger.error(`Error fetching ball-by-ball data for ${matchId}: ${error.message}`, '', 'SportsMonksService');
-        if (error.response?.status === 400) {
-          this.logger.warn(`Balls include may not be available for this match or subscription`, 'SportsMonksService');
-        }
-        return [];
+            scoreboard: inningsKey, // Include scoreboard identifier
+          };
+          
+          if (!commentaryByInnings[inningsKey]) {
+            commentaryByInnings[inningsKey] = [];
+          }
+          commentaryByInnings[inningsKey].push(commentaryEntry);
+        });
+        
+        // Sort each innings' commentary by over and ball number (newest first) - Cricinfo style
+        Object.keys(commentaryByInnings).forEach(key => {
+          commentaryByInnings[key].sort((a: any, b: any) => {
+            if (a.over !== b.over) return b.over - a.over; // Higher over first
+            return b.ballNumber - a.ballNumber; // Higher ball number first
+          });
+        });
+        
+        // Return structured data with innings separated
+        // S1 = First Innings, S2 = Second Innings
+        return {
+          firstInnings: commentaryByInnings['S1'] || [],
+          secondInnings: commentaryByInnings['S2'] || [],
+          all: Object.values(commentaryByInnings).flat().sort((a: any, b: any) => {
+            // Sort all commentary by timestamp (newest first) for backward compatibility
+            return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+          }),
+        };
+      } else {
+        this.logger.warn(`No ball-by-ball data available for match ${matchId}`, 'SportsMonksService');
+        return {
+          firstInnings: [],
+          secondInnings: [],
+          all: [],
+        };
       }
     } catch (error: any) {
       this.logger.error(`Error fetching ${sport} commentary for ${matchId}`, error.stack, 'SportsMonksService');
-      return [];
+      if (error.response?.status === 400) {
+        this.logger.warn(`Balls include may not be available for this match or subscription`, 'SportsMonksService');
+      }
+      return {
+        firstInnings: [],
+        secondInnings: [],
+        all: [],
+      };
     }
   }
 

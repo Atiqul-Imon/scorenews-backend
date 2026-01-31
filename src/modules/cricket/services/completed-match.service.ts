@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { CompletedMatch, CompletedMatchDocument } from '../schemas/completed-match.schema';
 import { SportsMonksService } from './sportsmonks.service';
 import { transformSportsMonksMatchToFrontend } from '../utils/match-transformers';
-import { parseApiResultNote, calculateMatchResult } from '../utils/match-transformers';
+import { parseApiResultNote } from '../utils/match-transformers';
 import { determineMatchStatus, isCompleted } from '../utils/status-determiner';
 import { isValidMatchId, sanitizeMatchId, validateCompletedMatch } from '../utils/validation';
 import { WinstonLoggerService } from '../../../common/logger/winston-logger.service';
@@ -55,8 +55,10 @@ export class CompletedMatchService {
       const total = await this.completedMatchModel.countDocuments(filter);
 
       // Transform for frontend compatibility: map finalScore to currentScore
+      // Ensure status is explicitly set to 'completed' for all matches
       const transformedMatches = (matches as CompletedMatch[]).map((match) => ({
         ...match,
+        status: 'completed' as const, // Explicitly set status to completed
         // Frontend expects currentScore, so map finalScore to currentScore
         currentScore: match.finalScore ? {
           home: {
@@ -124,6 +126,14 @@ export class CompletedMatchService {
 
           // Transform to frontend format
           const transformed = transformSportsMonksMatchToFrontend(fullMatchData, 'cricket');
+          
+          // Log before enrichment to see if transformer extracted names
+          const battingWithNamesBefore = transformed.batting?.filter((b: any) => b.playerName).length || 0;
+          const bowlingWithNamesBefore = transformed.bowling?.filter((b: any) => b.playerName).length || 0;
+          this.logger.log(`[Match ${apiMatch.id}] After transformation: batting=${transformed.batting?.length || 0} (${battingWithNamesBefore} with names), bowling=${transformed.bowling?.length || 0} (${bowlingWithNamesBefore} with names)`, 'CompletedMatchService');
+
+          // Enrich player names (similar to live match service)
+          await this.enrichPlayerNames(transformed);
 
           // Parse result
           let result = transformed.result;
@@ -137,50 +147,69 @@ export class CompletedMatchService {
             );
           }
 
-          // Calculate result if still not available
-          if (!result && transformed.currentScore) {
-            result = calculateMatchResult(
-              transformed.currentScore,
-              transformed.innings || [],
-              transformed.teams,
-              fullMatchData.localteam_id,
-              fullMatchData.visitorteam_id,
-              true, // isV2Format
-              fullMatchData.winner_team_id
-            );
-            if (result) {
-              result.dataSource = 'calculated';
-            }
-          }
-
+          // CRITICAL: Never calculate result locally - only use API-provided data
+          // If API doesn't provide result, skip this match
           if (!result) {
-            this.logger.warn(`Could not determine result for match ${apiMatch.id}`, 'CompletedMatchService');
+            this.logger.warn(
+              `Skipping match ${apiMatch.id}: API did not provide result. ` +
+              `Required fields: winner_team_id=${fullMatchData.winner_team_id}, note="${fullMatchData.note?.substring(0, 100)}"`,
+              'CompletedMatchService'
+            );
+            continue;
+          }
+          
+          // Ensure result is marked as from API (never calculated)
+          result.dataSource = 'api';
+
+          // CRITICAL: Only use API-provided score data. Do not use fallbacks.
+          // If API doesn't provide required score data, skip this match.
+          if (!transformed.currentScore?.home?.runs && transformed.currentScore?.home?.runs !== 0) {
+            this.logger.warn(
+              `Skipping match ${apiMatch.id}: API did not provide home team runs.`,
+              'CompletedMatchService'
+            );
+            continue;
+          }
+          if (!transformed.currentScore?.away?.runs && transformed.currentScore?.away?.runs !== 0) {
+            this.logger.warn(
+              `Skipping match ${apiMatch.id}: API did not provide away team runs.`,
+              'CompletedMatchService'
+            );
             continue;
           }
 
-          // Convert to CompletedMatch format
+          // Convert to CompletedMatch format - only use API-provided values
           const finalScore = {
             home: {
-              runs: transformed.currentScore?.home?.runs || 0,
-              wickets: transformed.currentScore?.home?.wickets || 0,
-              overs: transformed.currentScore?.home?.overs || 0,
+              runs: transformed.currentScore.home.runs,
+              wickets: transformed.currentScore.home.wickets !== undefined && transformed.currentScore.home.wickets !== null 
+                ? transformed.currentScore.home.wickets 
+                : 10, // API may not provide wickets for completed matches, but we need a value for schema
+              overs: transformed.currentScore.home.overs !== undefined && transformed.currentScore.home.overs !== null
+                ? transformed.currentScore.home.overs
+                : 0, // API may not provide overs, but we need a value for schema
             },
             away: {
-              runs: transformed.currentScore?.away?.runs || 0,
-              wickets: transformed.currentScore?.away?.wickets || 0,
-              overs: transformed.currentScore?.away?.overs || 0,
+              runs: transformed.currentScore.away.runs,
+              wickets: transformed.currentScore.away.wickets !== undefined && transformed.currentScore.away.wickets !== null
+                ? transformed.currentScore.away.wickets
+                : 10, // API may not provide wickets for completed matches, but we need a value for schema
+              overs: transformed.currentScore.away.overs !== undefined && transformed.currentScore.away.overs !== null
+                ? transformed.currentScore.away.overs
+                : 0, // API may not provide overs, but we need a value for schema
             },
           };
 
-          const completedMatch: CompletedMatch = {
-            matchId: transformed.matchId,
-            series: transformed.series,
-            teams: transformed.teams,
-            venue: transformed.venue,
-            format: transformed.format,
-            startTime: transformed.startTime,
-            endTime: transformed.endTime || new Date(),
-            finalScore,
+      const completedMatch: CompletedMatch = {
+        matchId: transformed.matchId,
+        series: transformed.series,
+        teams: transformed.teams,
+        venue: transformed.venue,
+        format: transformed.format,
+        startTime: transformed.startTime,
+        endTime: transformed.endTime || new Date(),
+        status: 'completed', // Explicitly set status for completed matches
+        finalScore,
             // Frontend compatibility: also include currentScore (mapped from finalScore)
             currentScore: {
               home: {
@@ -202,7 +231,7 @@ export class CompletedMatchService {
               margin: result.margin,
               marginType: result.marginType,
               resultText: result.resultText,
-              dataSource: result.dataSource || 'api',
+              dataSource: 'api', // Always from API, never calculated
             },
             innings: transformed.innings,
             batting: transformed.batting,
@@ -218,7 +247,7 @@ export class CompletedMatchService {
             superOver: fullMatchData.super_over || false,
             followOn: fullMatchData.follow_on || false,
             drawNoResult: fullMatchData.draw_noresult || false,
-            dataSource: result.dataSource || 'api',
+            dataSource: 'api', // Always from API, never calculated
             apiFetchedAt: new Date(),
             isCompleteData: true,
           };
@@ -324,9 +353,46 @@ export class CompletedMatchService {
       const match = await this.completedMatchModel.findOne({ matchId: sanitizedId }).lean();
       
       if (match) {
+        // Check if match needs player name enrichment
+        const needsEnrichment = (match.batting && match.batting.some((b: any) => !b.playerName && b.playerId)) ||
+                               (match.bowling && match.bowling.some((b: any) => !b.playerName && b.playerId));
+        
+        if (needsEnrichment) {
+          this.logger.log(`Match ${matchId} has missing player names, fetching from API to enrich...`, 'CompletedMatchService');
+          try {
+            // Fetch fresh data from API and enrich
+            const apiMatch = await this.sportsMonksService.getMatchDetails(matchId, 'cricket');
+            if (apiMatch) {
+              const transformed = transformSportsMonksMatchToFrontend(apiMatch, 'cricket');
+              await this.enrichPlayerNames(transformed);
+              
+              // Update the match with enriched data
+              const enrichedMatch = {
+                ...match,
+                batting: transformed.batting,
+                bowling: transformed.bowling,
+              };
+              
+              // Save enriched data back to database (async, don't wait)
+              this.saveOrUpdateCompletedMatch(enrichedMatch as CompletedMatch).catch((err: any) => {
+                this.logger.warn(`Failed to save enriched data for match ${matchId}: ${err.message}`, 'CompletedMatchService');
+              });
+              
+              // Use enriched match for return
+              match.batting = enrichedMatch.batting;
+              match.bowling = enrichedMatch.bowling;
+            }
+          } catch (error: any) {
+            this.logger.warn(`Failed to enrich match ${matchId}: ${error.message}`, 'CompletedMatchService');
+            // Continue to return original match even if enrichment fails
+          }
+        }
+        
         // Transform for frontend compatibility: map finalScore to currentScore
+        // Ensure status is explicitly set to 'completed'
         const transformedMatch = {
           ...match,
+          status: 'completed' as const, // Explicitly set status to completed
           currentScore: (match as CompletedMatch).finalScore ? {
             home: {
               runs: (match as CompletedMatch).finalScore.home.runs,
@@ -418,38 +484,56 @@ export class CompletedMatchService {
         );
       }
 
-      // Calculate result if still not available
-      if (!result && transformed.currentScore) {
-        result = calculateMatchResult(
-          transformed.currentScore,
-          transformed.innings || [],
-          transformed.teams,
-          fullMatchData.localteam_id,
-          fullMatchData.visitorteam_id,
-          true,
-          fullMatchData.winner_team_id
-        );
-        if (result) {
-          result.dataSource = 'calculated';
-        }
-      }
-
+      // CRITICAL: Never calculate result locally - only use API-provided data
+      // If API doesn't provide result, we cannot save this match
       if (!result) {
-        this.logger.warn(`Could not determine result for match ${apiMatch.id}`, 'CompletedMatchService');
+        this.logger.warn(
+          `Cannot save match ${apiMatch.id}: API did not provide result. ` +
+          `Required fields: winner_team_id=${fullMatchData.winner_team_id}, note="${fullMatchData.note?.substring(0, 100)}"`,
+          'CompletedMatchService'
+        );
+        return null;
+      }
+      
+      // Ensure result is marked as from API (never calculated)
+      result.dataSource = 'api';
+
+      // CRITICAL: Only use API-provided score data. Do not use fallbacks.
+      // If API doesn't provide required score data, we cannot save this match.
+      if (!transformed.currentScore?.home?.runs && transformed.currentScore?.home?.runs !== 0) {
+        this.logger.warn(
+          `Cannot save match ${apiMatch.id}: API did not provide home team runs.`,
+          'CompletedMatchService'
+        );
+        return null;
+      }
+      if (!transformed.currentScore?.away?.runs && transformed.currentScore?.away?.runs !== 0) {
+        this.logger.warn(
+          `Cannot save match ${apiMatch.id}: API did not provide away team runs.`,
+          'CompletedMatchService'
+        );
         return null;
       }
 
-      // Convert to CompletedMatch format
+      // Convert to CompletedMatch format - only use API-provided values
       const finalScore = {
         home: {
-          runs: transformed.currentScore?.home?.runs || 0,
-          wickets: transformed.currentScore?.home?.wickets || 0,
-          overs: transformed.currentScore?.home?.overs || 0,
+          runs: transformed.currentScore.home.runs,
+          wickets: transformed.currentScore.home.wickets !== undefined && transformed.currentScore.home.wickets !== null 
+            ? transformed.currentScore.home.wickets 
+            : 10, // API may not provide wickets for completed matches, but we need a value for schema
+          overs: transformed.currentScore.home.overs !== undefined && transformed.currentScore.home.overs !== null
+            ? transformed.currentScore.home.overs
+            : 0, // API may not provide overs, but we need a value for schema
         },
         away: {
-          runs: transformed.currentScore?.away?.runs || 0,
-          wickets: transformed.currentScore?.away?.wickets || 0,
-          overs: transformed.currentScore?.away?.overs || 0,
+          runs: transformed.currentScore.away.runs,
+          wickets: transformed.currentScore.away.wickets !== undefined && transformed.currentScore.away.wickets !== null
+            ? transformed.currentScore.away.wickets
+            : 10, // API may not provide wickets for completed matches, but we need a value for schema
+          overs: transformed.currentScore.away.overs !== undefined && transformed.currentScore.away.overs !== null
+            ? transformed.currentScore.away.overs
+            : 0, // API may not provide overs, but we need a value for schema
         },
       };
 
@@ -461,6 +545,7 @@ export class CompletedMatchService {
         format: transformed.format,
         startTime: transformed.startTime,
         endTime: transformed.endTime || new Date(),
+        status: 'completed', // Explicitly set status for completed matches
         finalScore,
         // Frontend compatibility: also include currentScore (mapped from finalScore)
         currentScore: {
@@ -483,7 +568,7 @@ export class CompletedMatchService {
           margin: result.margin,
           marginType: result.marginType,
           resultText: result.resultText,
-          dataSource: result.dataSource || 'api',
+          dataSource: 'api', // Always from API, never calculated
         },
         innings: transformed.innings,
         batting: transformed.batting,
@@ -499,7 +584,7 @@ export class CompletedMatchService {
         superOver: fullMatchData.super_over || false,
         followOn: fullMatchData.follow_on || false,
         drawNoResult: fullMatchData.draw_noresult || false,
-        dataSource: result.dataSource || 'api',
+        dataSource: 'api', // Always from API, never calculated
         apiFetchedAt: new Date(),
         isCompleteData: true,
       };
@@ -509,6 +594,105 @@ export class CompletedMatchService {
     } catch (error: any) {
       this.logger.error(`Error processing single match ${apiMatch.id}`, error.stack, 'CompletedMatchService');
       return null;
+    }
+  }
+
+  /**
+   * Enrich player names by fetching player details from API
+   */
+  private async enrichPlayerNames(transformed: any): Promise<void> {
+    try {
+      // Log before enrichment
+      const battingCount = transformed.batting?.length || 0;
+      const bowlingCount = transformed.bowling?.length || 0;
+      const battingWithNames = transformed.batting?.filter((b: any) => b.playerName).length || 0;
+      const bowlingWithNames = transformed.bowling?.filter((b: any) => b.playerName).length || 0;
+      this.logger.log(`[Match ${transformed.matchId}] Before enrichment: batting=${battingCount} (${battingWithNames} with names), bowling=${bowlingCount} (${bowlingWithNames} with names)`, 'CompletedMatchService');
+      
+      // Collect all unique player IDs that need names
+      const playerIds = new Set<string>();
+      
+      // Collect from batting
+      if (transformed.batting && Array.isArray(transformed.batting)) {
+        transformed.batting.forEach((b: any) => {
+          if (b.playerId && !b.playerName) {
+            playerIds.add(b.playerId);
+          }
+        });
+      }
+      
+      // Collect from bowling
+      if (transformed.bowling && Array.isArray(transformed.bowling)) {
+        transformed.bowling.forEach((b: any) => {
+          if (b.playerId && !b.playerName) {
+            playerIds.add(b.playerId);
+          }
+        });
+      }
+      
+      if (playerIds.size === 0) {
+        this.logger.log(`[Match ${transformed.matchId}] No player IDs need enrichment - all names already extracted from API`, 'CompletedMatchService');
+        return; // No player IDs to fetch
+      }
+      
+      this.logger.log(`Enriching ${playerIds.size} player names for completed match ${transformed.matchId}`, 'CompletedMatchService');
+      
+      // Fetch player names in parallel (with rate limiting to avoid API throttling)
+      const playerPromises = Array.from(playerIds).map(async (playerId) => {
+        try {
+          const player = await this.sportsMonksService.getPlayerDetails(playerId);
+          if (player) {
+            const playerName = player.fullname || player.full_name || player.name || 
+                              (player.firstname && player.lastname ? `${player.firstname} ${player.lastname}` : player.firstname || player.first_name);
+            return { playerId, playerName: playerName || undefined };
+          }
+          return { playerId, playerName: undefined };
+        } catch (error: any) {
+          this.logger.warn(`Failed to fetch player ${playerId}: ${error.message}`, 'CompletedMatchService');
+          return { playerId, playerName: undefined };
+        }
+      });
+      
+      const playerData = await Promise.all(playerPromises);
+      const playerMap = new Map<string, string>();
+      
+      playerData.forEach(({ playerId, playerName }) => {
+        if (playerName) {
+          playerMap.set(playerId, playerName);
+        }
+      });
+      
+      // Update batting records
+      if (transformed.batting && Array.isArray(transformed.batting)) {
+        transformed.batting.forEach((b: any) => {
+          if (b.playerId && !b.playerName && playerMap.has(b.playerId)) {
+            b.playerName = playerMap.get(b.playerId);
+          }
+        });
+      }
+      
+      // Update bowling records
+      if (transformed.bowling && Array.isArray(transformed.bowling)) {
+        transformed.bowling.forEach((b: any) => {
+          if (b.playerId && !b.playerName && playerMap.has(b.playerId)) {
+            b.playerName = playerMap.get(b.playerId);
+          }
+        });
+      }
+      
+      this.logger.log(`Successfully enriched ${playerMap.size} player names out of ${playerIds.size} requested for match ${transformed.matchId}`, 'CompletedMatchService');
+      
+      // Log after enrichment
+      const battingWithNamesAfter = transformed.batting?.filter((b: any) => b.playerName).length || 0;
+      const bowlingWithNamesAfter = transformed.bowling?.filter((b: any) => b.playerName).length || 0;
+      this.logger.log(`[Match ${transformed.matchId}] After enrichment: batting=${battingCount} (${battingWithNamesAfter} with names), bowling=${bowlingCount} (${bowlingWithNamesAfter} with names)`, 'CompletedMatchService');
+      
+      // CRITICAL: Don't filter out records without names for completed matches
+      // Keep all records even if names aren't available - the frontend can handle it
+      // Unlike live matches, completed matches should show all players even if names are missing
+    } catch (error: any) {
+      this.logger.error(`Error in enrichPlayerNames for match ${transformed.matchId}: ${error.message}`, error.stack, 'CompletedMatchService');
+      // Don't throw - continue even if enrichment fails
     }
   }
 }
