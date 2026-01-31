@@ -1466,20 +1466,53 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         };
       }
       
-      // Check scoreboards for partnership data - check ALL scoreboards, not just 'total'
+      // CRITICAL: Find partnership from the CURRENT/ACTIVE innings scoreboard, not just any 'total' scoreboard
+      // Use the same logic as currentBatters to identify the current innings
       if (apiMatch.scoreboards && Array.isArray(apiMatch.scoreboards)) {
-        // First, try to find partnership in the current/active scoreboard (type === 'total')
-        let currentScoreboard = apiMatch.scoreboards.find((sb: any) => sb.type === 'total');
+        // Determine current batting team using the same logic as currentBatters
+        const matchStatus = apiMatch.status || '';
+        const isFirstInnings = matchStatus.includes('1st Innings') || matchStatus === '1st Innings';
+        const isSecondInnings = matchStatus.includes('2nd Innings') || matchStatus === '2nd Innings';
         
-        // If not found, check all scoreboards
-        if (!currentScoreboard) {
-          currentScoreboard = apiMatch.scoreboards[apiMatch.scoreboards.length - 1]; // Use last scoreboard as fallback
+        let currentBattingTeamId: number | null = null;
+        if (isFirstInnings) {
+          currentBattingTeamId = localteamId || null;
+        } else if (isSecondInnings) {
+          currentBattingTeamId = visitorteamId || null;
+        } else {
+          // If status doesn't indicate innings, try to find the team with most recent activity
+          const activeScoreboard = apiMatch.scoreboards
+            .filter((sb: any) => sb.type === 'total' && sb.overs > 0)
+            .sort((a: any, b: any) => {
+              const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+              const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+              return bTime - aTime;
+            })[0];
+          currentBattingTeamId = activeScoreboard?.team_id || null;
         }
         
-        if (currentScoreboard) {
+        // Find the current innings scoreboard - same logic as currentBatters
+        const currentInningsScoreboard = currentBattingTeamId
+          ? apiMatch.scoreboards
+              .filter((sb: any) => 
+                sb.type === 'total' && 
+                sb.overs > 0 && 
+                sb.team_id === currentBattingTeamId
+              )
+              .sort((a: any, b: any) => {
+                // Sort by most recent updated_at (newest first)
+                const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+                const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+                return bTime - aTime;
+              })[0]
+          : null;
+        
+        // If we found the current innings scoreboard, check it for partnership data
+        if (currentInningsScoreboard) {
           // Check for nested partnership object
-          if (currentScoreboard.partnership && typeof currentScoreboard.partnership === 'object') {
-            const p = currentScoreboard.partnership;
+          if (currentInningsScoreboard.partnership && typeof currentInningsScoreboard.partnership === 'object') {
+            const p = currentInningsScoreboard.partnership;
+            console.log(`[Transformer] Found partnership in current innings scoreboard (${currentInningsScoreboard.scoreboard}):`, p);
             return {
               runs: p.runs !== undefined && p.runs !== null ? p.runs : undefined,
               balls: p.balls !== undefined && p.balls !== null ? p.balls : undefined,
@@ -1490,34 +1523,67 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
           }
           
           // Check for individual partnership fields in scoreboard
-          if (currentScoreboard.partnership_runs !== undefined || currentScoreboard.partnership_balls !== undefined) {
+          if (currentInningsScoreboard.partnership_runs !== undefined || currentInningsScoreboard.partnership_balls !== undefined) {
+            console.log(`[Transformer] Found partnership fields in current innings scoreboard (${currentInningsScoreboard.scoreboard}): runs=${currentInningsScoreboard.partnership_runs}, balls=${currentInningsScoreboard.partnership_balls}`);
             return {
-              runs: currentScoreboard.partnership_runs !== undefined && currentScoreboard.partnership_runs !== null 
-                ? currentScoreboard.partnership_runs 
+              runs: currentInningsScoreboard.partnership_runs !== undefined && currentInningsScoreboard.partnership_runs !== null 
+                ? currentInningsScoreboard.partnership_runs 
                 : undefined,
-              balls: currentScoreboard.partnership_balls !== undefined && currentScoreboard.partnership_balls !== null 
-                ? currentScoreboard.partnership_balls 
+              balls: currentInningsScoreboard.partnership_balls !== undefined && currentInningsScoreboard.partnership_balls !== null 
+                ? currentInningsScoreboard.partnership_balls 
                 : undefined,
-              runRate: currentScoreboard.partnership_rate !== undefined && currentScoreboard.partnership_rate !== null 
-                ? currentScoreboard.partnership_rate.toString() 
+              runRate: currentInningsScoreboard.partnership_rate !== undefined && currentInningsScoreboard.partnership_rate !== null 
+                ? currentInningsScoreboard.partnership_rate.toString() 
                 : undefined,
             };
           }
+        }
+        
+        // Fallback: If current innings scoreboard doesn't have partnership, check all 'total' scoreboards
+        // (but prefer the one with most recent activity)
+        const fallbackScoreboard = apiMatch.scoreboards
+          .filter((sb: any) => sb.type === 'total' && sb.overs > 0)
+          .sort((a: any, b: any) => {
+            const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+            const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+            return bTime - aTime;
+          })[0];
+        
+        if (fallbackScoreboard) {
+          if (fallbackScoreboard.partnership && typeof fallbackScoreboard.partnership === 'object') {
+            const p = fallbackScoreboard.partnership;
+            console.log(`[Transformer] Found partnership in fallback scoreboard (${fallbackScoreboard.scoreboard}):`, p);
+            return {
+              runs: p.runs !== undefined && p.runs !== null ? p.runs : undefined,
+              balls: p.balls !== undefined && p.balls !== null ? p.balls : undefined,
+              runRate: p.run_rate !== undefined && p.run_rate !== null 
+                ? p.run_rate.toString() 
+                : (p.rate !== undefined && p.rate !== null ? p.rate.toString() : undefined),
+            };
+          }
           
-          // Log what we found in scoreboard for debugging
-          const sbKeys = Object.keys(currentScoreboard);
-          const partnershipKeys = sbKeys.filter(k => k.toLowerCase().includes('partnership') || k.toLowerCase().includes('part'));
-          if (partnershipKeys.length > 0) {
-            console.log(`[Transformer] Found partnership keys in scoreboard: ${partnershipKeys.join(', ')}`);
+          if (fallbackScoreboard.partnership_runs !== undefined || fallbackScoreboard.partnership_balls !== undefined) {
+            console.log(`[Transformer] Found partnership fields in fallback scoreboard (${fallbackScoreboard.scoreboard}): runs=${fallbackScoreboard.partnership_runs}, balls=${fallbackScoreboard.partnership_balls}`);
+            return {
+              runs: fallbackScoreboard.partnership_runs !== undefined && fallbackScoreboard.partnership_runs !== null 
+                ? fallbackScoreboard.partnership_runs 
+                : undefined,
+              balls: fallbackScoreboard.partnership_balls !== undefined && fallbackScoreboard.partnership_balls !== null 
+                ? fallbackScoreboard.partnership_balls 
+                : undefined,
+              runRate: fallbackScoreboard.partnership_rate !== undefined && fallbackScoreboard.partnership_rate !== null 
+                ? fallbackScoreboard.partnership_rate.toString() 
+                : undefined,
+            };
           }
         }
         
-        // Also check all scoreboards for any partnership data
+        // Log all scoreboards for debugging
         for (const sb of apiMatch.scoreboards) {
           const sbKeys = Object.keys(sb);
           const partnershipKeys = sbKeys.filter(k => k.toLowerCase().includes('partnership') || k.toLowerCase().includes('part'));
           if (partnershipKeys.length > 0) {
-            console.log(`[Transformer] Scoreboard ${sb.type || 'unknown'} has partnership keys: ${partnershipKeys.join(', ')}`);
+            console.log(`[Transformer] Scoreboard ${sb.scoreboard || sb.type || 'unknown'} has partnership keys: ${partnershipKeys.join(', ')}`);
             partnershipKeys.forEach(key => {
               console.log(`[Transformer] ${key}: ${JSON.stringify(sb[key])}`);
             });
