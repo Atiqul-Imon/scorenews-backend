@@ -17,7 +17,19 @@ export class MatchSchedulerService implements OnModuleInit {
     private logger: WinstonLoggerService,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
+    this.logger.log('Initializing match schedulers...', 'MatchSchedulerService');
+    
+    // Immediately fetch live matches on startup (don't wait for first interval)
+    try {
+      this.logger.log('Fetching initial live matches on startup...', 'MatchSchedulerService');
+      await this.liveMatchService.fetchAndUpdateLiveMatches();
+      this.logger.log('Initial live matches fetched', 'MatchSchedulerService');
+    } catch (error: any) {
+      this.logger.error('Failed to fetch initial live matches', error.stack, 'MatchSchedulerService');
+    }
+    
+    // Start background schedulers
     this.startSchedulers();
   }
 
@@ -94,5 +106,6 @@ export class MatchSchedulerService implements OnModuleInit {
     await this.completedMatchService.fetchAndSaveCompletedMatches();
   }
 }
+
 
 

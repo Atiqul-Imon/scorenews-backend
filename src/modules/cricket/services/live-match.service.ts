@@ -70,22 +70,74 @@ export class LiveMatchService {
       
       for (const apiMatch of apiMatches) {
         try {
-          // Determine status with high confidence
-          const statusResult = determineMatchStatus(apiMatch);
+          // Log raw API match data for debugging
+          this.logger.log(`Processing API match: id=${apiMatch.id}, state_id=${apiMatch.state_id}, status=${apiMatch.status}, live=${apiMatch.live}`, 'LiveMatchService');
           
-          // Only process if definitely live
-          if (statusResult.status !== 'live' || statusResult.confidence !== 'high') {
-            this.logger.log(`Skipping match ${apiMatch.id}: ${statusResult.reason}`, 'LiveMatchService');
+          // ALWAYS fetch full match details to get batting, bowling, and complete scorecard data
+          // This ensures we have all available data from the API
+          let matchData = apiMatch;
+          try {
+            this.logger.log(`Fetching full details for match ${apiMatch.id} to get batting/bowling data...`, 'LiveMatchService');
+            const fullDetails = await this.sportsMonksService.getMatchDetails(apiMatch.id.toString(), 'cricket');
+            if (fullDetails) {
+              // Merge: use full details but keep live status from livescores
+              matchData = {
+                ...fullDetails,
+                live: apiMatch.live, // Keep live status from livescores
+                status: apiMatch.status, // Keep status from livescores
+                state_id: apiMatch.state_id, // Keep state_id from livescores
+              };
+              this.logger.log(`Fetched full details for match ${apiMatch.id} (has batting: ${!!fullDetails.batting}, has bowling: ${!!fullDetails.bowling})`, 'LiveMatchService');
+            }
+          } catch (detailError: any) {
+            this.logger.warn(`Failed to fetch full details for match ${apiMatch.id}: ${detailError.message}, using livescores data only`, 'LiveMatchService');
+            // Continue with livescores data - transformer will handle it
+          }
+          
+          // Determine status
+          const statusResult = determineMatchStatus(matchData);
+          
+          // Process if live (accept medium confidence too, as API can be inconsistent)
+          if (statusResult.status !== 'live') {
+            this.logger.log(`Skipping match ${matchData.id}: ${statusResult.reason} (status: ${statusResult.status})`, 'LiveMatchService');
             continue;
+          }
+          
+          // Log confidence level for debugging
+          if (statusResult.confidence !== 'high') {
+            this.logger.log(`Processing match ${matchData.id} with ${statusResult.confidence} confidence: ${statusResult.reason}`, 'LiveMatchService');
           }
 
           // Transform to frontend format first
-          const transformed = transformSportsMonksMatchToFrontend(apiMatch, 'cricket');
-          
-          if (!transformed || !transformed.matchId) {
-            this.logger.warn(`Transformation failed for match ${apiMatch.id}`, 'LiveMatchService');
+          let transformed;
+          try {
+            transformed = transformSportsMonksMatchToFrontend(matchData, 'cricket');
+          } catch (transformError: any) {
+            this.logger.error(`Transformer threw error for match ${matchData.id}: ${transformError.message}`, transformError.stack, 'LiveMatchService');
             continue;
           }
+          
+          if (!transformed || !transformed.matchId) {
+            this.logger.warn(`Transformation failed for match ${matchData.id}: transformed=${!!transformed}, matchId=${transformed?.matchId}`, 'LiveMatchService');
+            // Log what we got from API
+            this.logger.warn(`API match data: ${JSON.stringify({
+              id: matchData.id,
+              name: matchData.name,
+              status: matchData.status,
+              state_id: matchData.state_id,
+              live: matchData.live,
+              localteam: !!matchData.localteam,
+              visitorteam: !!matchData.visitorteam,
+              localteam_id: matchData.localteam_id,
+              visitorteam_id: matchData.visitorteam_id,
+              scoreboards: matchData.scoreboards?.length || 0,
+              has_venue: !!matchData.venue,
+            })}`, 'LiveMatchService');
+            continue;
+          }
+          
+          this.logger.log(`Successfully transformed match ${matchData.id} -> ${transformed.matchId}`, 'LiveMatchService');
+          this.logger.log(`Transformed match details: name=${transformed.name}, status=${transformed.status}, format=${transformed.format}`, 'LiveMatchService');
           
           // Convert to LiveMatch format
           const liveMatch: LiveMatch = {
@@ -95,6 +147,7 @@ export class LiveMatchService {
             venue: transformed.venue,
             format: transformed.format,
             startTime: transformed.startTime,
+            status: transformed.status || 'live', // Ensure status is set
             currentScore: transformed.currentScore || {
               home: { runs: 0, wickets: 0, overs: 0, balls: 0 },
               away: { runs: 0, wickets: 0, overs: 0, balls: 0 },
@@ -110,8 +163,11 @@ export class LiveMatchService {
             elected: transformed.elected,
             target: transformed.target,
             round: transformed.round,
+            // Include full batting and bowling scorecards
+            batting: transformed.batting,
+            bowling: transformed.bowling,
             lastUpdatedAt: new Date(),
-            updateCount: 0,
+            updateCount: 0, // Required by schema, but will be excluded from $set to avoid conflict with $inc
             expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
           };
 
@@ -123,7 +179,12 @@ export class LiveMatchService {
         }
       }
 
-      this.logger.log(`Successfully processed ${liveMatches.length} live matches`, 'LiveMatchService');
+      this.logger.log(`=== LIVE MATCH FETCH SUMMARY ===`, 'LiveMatchService');
+      this.logger.log(`API returned: ${apiMatches.length} matches`, 'LiveMatchService');
+      this.logger.log(`Successfully processed and saved: ${liveMatches.length} live matches`, 'LiveMatchService');
+      if (apiMatches.length > liveMatches.length) {
+        this.logger.warn(`Filtered out ${apiMatches.length - liveMatches.length} matches (not live or transformation failed)`, 'LiveMatchService');
+      }
       return liveMatches;
     } catch (error: any) {
       this.logger.error('Error fetching and updating live matches', error.stack, 'LiveMatchService');
@@ -152,18 +213,45 @@ export class LiveMatchService {
       match.matchId = sanitizedMatchId;
 
       // Atomic upsert operation - prevents race conditions
+      this.logger.log(`Saving live match to database: matchId=${match.matchId}, name=${match.series}`, 'LiveMatchService');
+      
+      // Use $inc for updateCount - works for both new and existing documents
+      // For new documents, MongoDB treats missing field as 0 and increments to 1
+      // For existing documents, it increments the current value
+      // This avoids conflict between $setOnInsert and $inc on the same field
       const result = await this.liveMatchModel.findOneAndUpdate(
         { matchId: match.matchId },
         {
           $set: {
-            ...match,
+            matchId: match.matchId,
+            series: match.series,
+            teams: match.teams,
+            venue: match.venue,
+            format: match.format,
+            startTime: match.startTime,
+            status: match.status || 'live', // Ensure status is always set
+            currentScore: match.currentScore,
+            currentBatters: match.currentBatters,
+            currentBowlers: match.currentBowlers,
+            partnership: match.partnership,
+            lastWicket: match.lastWicket,
+            innings: match.innings,
+            liveData: match.liveData,
+            matchStarted: match.matchStarted,
+            tossWon: match.tossWon,
+            elected: match.elected,
+            target: match.target,
+            round: match.round,
+            // Include full batting and bowling scorecards
+            batting: match.batting,
+            bowling: match.bowling,
             lastUpdatedAt: new Date(),
           },
-          $inc: { updateCount: 1 },
+          $inc: { updateCount: 1 }, // Works for both new and existing documents
           $setOnInsert: {
             createdAt: new Date(),
-            updateCount: 0,
             expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            // Note: updateCount is NOT in $setOnInsert - $inc handles it for both cases
           },
         },
         {
@@ -174,29 +262,113 @@ export class LiveMatchService {
         }
       ).lean();
 
-      const updateCount = result?.updateCount || 0;
-      if (updateCount > 0) {
-        this.logger.log(`Updated live match ${match.matchId} (update #${updateCount})`, 'LiveMatchService');
+      const finalUpdateCount = result?.updateCount || 0;
+      if (finalUpdateCount > 0) {
+        this.logger.log(`Updated live match ${match.matchId} (update #${finalUpdateCount})`, 'LiveMatchService');
       } else {
         this.logger.log(`Created new live match ${match.matchId}`, 'LiveMatchService');
       }
       
       return result as LiveMatch;
     } catch (error: any) {
-      // Handle duplicate key errors gracefully
+      // Handle MongoDB errors gracefully
       if (error.code === 11000 || error.name === 'MongoServerError') {
-        this.logger.warn(`Duplicate key error for match ${match.matchId}, retrying...`, 'LiveMatchService');
-        // Retry once with findOneAndUpdate
-        try {
-          const retryResult = await this.liveMatchModel.findOneAndUpdate(
-            { matchId: match.matchId },
-            { $set: match, $inc: { updateCount: 1 } },
-            { new: true, runValidators: true, session }
-          ).lean();
-          return retryResult as LiveMatch;
-        } catch (retryError: any) {
-          this.logger.error(`Retry failed for match ${match.matchId}`, retryError.stack, 'LiveMatchService');
-          throw retryError;
+        // Check if it's the updateCount conflict error
+        if (error.message?.includes('updateCount') && error.message?.includes('conflict')) {
+          // This shouldn't happen anymore, but if it does, log and skip updateCount
+          this.logger.warn(`UpdateCount conflict for match ${match.matchId}, retrying without updateCount increment...`, 'LiveMatchService');
+          try {
+            // Retry without $inc - just set the fields
+            const retryResult = await this.liveMatchModel.findOneAndUpdate(
+              { matchId: match.matchId },
+              {
+                $set: {
+                  matchId: match.matchId,
+                  series: match.series,
+                  teams: match.teams,
+                  venue: match.venue,
+                  format: match.format,
+                  startTime: match.startTime,
+                  currentScore: match.currentScore,
+                  currentBatters: match.currentBatters,
+                  currentBowlers: match.currentBowlers,
+                  partnership: match.partnership,
+                  lastWicket: match.lastWicket,
+                  innings: match.innings,
+                  liveData: match.liveData,
+                  matchStarted: match.matchStarted,
+                  tossWon: match.tossWon,
+                  elected: match.elected,
+                  target: match.target,
+                  round: match.round,
+                  lastUpdatedAt: new Date(),
+                },
+                $setOnInsert: {
+                  createdAt: new Date(),
+                  expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+                  updateCount: 1, // Set to 1 for new documents only
+                },
+              },
+              {
+                upsert: true,
+                new: true,
+                runValidators: true,
+                session,
+              }
+            ).lean();
+            this.logger.log(`Retry successful for match ${match.matchId}`, 'LiveMatchService');
+            return retryResult as LiveMatch;
+          } catch (retryError: any) {
+            this.logger.error(`Retry failed for match ${match.matchId}: ${retryError.message}`, retryError.stack, 'LiveMatchService');
+            throw retryError;
+          }
+        } else {
+          // Other duplicate key errors - retry with same approach
+          this.logger.warn(`Duplicate key error for match ${match.matchId}, retrying...`, 'LiveMatchService');
+          try {
+            const retryResult = await this.liveMatchModel.findOneAndUpdate(
+              { matchId: match.matchId },
+              {
+                $set: {
+                  matchId: match.matchId,
+                  series: match.series,
+                  teams: match.teams,
+                  venue: match.venue,
+                  format: match.format,
+                  startTime: match.startTime,
+                  currentScore: match.currentScore,
+                  currentBatters: match.currentBatters,
+                  currentBowlers: match.currentBowlers,
+                  partnership: match.partnership,
+                  lastWicket: match.lastWicket,
+                  innings: match.innings,
+                  liveData: match.liveData,
+                  matchStarted: match.matchStarted,
+                  tossWon: match.tossWon,
+                  elected: match.elected,
+                  target: match.target,
+                  round: match.round,
+                  lastUpdatedAt: new Date(),
+                },
+                $inc: { updateCount: 1 },
+                $setOnInsert: {
+                  createdAt: new Date(),
+                  expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+                },
+              },
+              {
+                upsert: true,
+                new: true,
+                runValidators: true,
+                session,
+              }
+            ).lean();
+            this.logger.log(`Retry successful for match ${match.matchId}`, 'LiveMatchService');
+            return retryResult as LiveMatch;
+          } catch (retryError: any) {
+            this.logger.error(`Retry failed for match ${match.matchId}`, retryError.stack, 'LiveMatchService');
+            throw retryError;
+          }
         }
       }
       this.logger.error(`Error saving live match ${match.matchId}`, error.stack, 'LiveMatchService');

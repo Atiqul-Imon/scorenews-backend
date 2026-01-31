@@ -74,11 +74,19 @@ export function determineMatchStatus(apiMatch: any): StatusDeterminationResult {
   }
 
   // Priority 4: status field for live indicators
-  if (statusField.includes('Innings') || statusField.includes('Live') || statusField.includes('In Progress')) {
+  // Check for various live status indicators (case insensitive)
+  const statusLower = statusField.toLowerCase();
+  if (statusLower.includes('innings') || 
+      statusLower.includes('live') || 
+      statusLower.includes('in progress') ||
+      statusLower.includes('st innings') ||
+      statusLower.includes('nd innings') ||
+      statusLower.includes('rd innings') ||
+      statusLower.includes('th innings')) {
     return {
       status: 'live',
-      confidence: 'medium',
-      reason: `status field="${statusField}" indicates live`,
+      confidence: 'high', // Changed to high - "1st Innings", "2nd Innings" are definitive live indicators
+      reason: `status field="${statusField}" indicates live match in progress`,
     };
   }
 
@@ -148,5 +156,6 @@ export function isLive(apiMatch: any): boolean {
   const result = determineMatchStatus(apiMatch);
   return result.status === 'live' && result.confidence === 'high';
 }
+
 
 

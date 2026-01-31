@@ -38,7 +38,8 @@ export class SportsMonksService {
       this.logger.log(`Fetching live matches from ${endpoint}`, 'SportsMonksService');
       
       // Use include parameters for v2.0 API
-      // Include venue to show match location
+      // NOTE: The include parameter may not always return nested data in livescores endpoint
+      // We'll handle missing nested data in the transformer
       const includeParam = sport === 'cricket' 
         ? 'scoreboards,localteam,visitorteam,venue' 
         : 'scores,participants';
@@ -66,10 +67,61 @@ export class SportsMonksService {
         throw new Error(`SportsMonks API error: ${errorMsg}`);
       }
 
-      const matches = response.data?.data || [];
-      this.logger.log(`Live scores endpoint returned ${matches.length} matches`, 'SportsMonksService');
+      // Log full response structure for debugging
+      this.logger.log(`=== API RESPONSE DEBUG ===`, 'SportsMonksService');
+      this.logger.log(`Response keys: ${JSON.stringify(Object.keys(response.data || {}))}`, 'SportsMonksService');
+      this.logger.log(`Response.data type: ${typeof response.data}`, 'SportsMonksService');
+      this.logger.log(`Response.data.data type: ${typeof response.data?.data}`, 'SportsMonksService');
+      this.logger.log(`Response.data.data length: ${Array.isArray(response.data?.data) ? response.data.data.length : 'not an array'}`, 'SportsMonksService');
+      
+      // Try multiple possible response structures
+      let matches: any[] = [];
+      if (Array.isArray(response.data?.data)) {
+        matches = response.data.data;
+      } else if (Array.isArray(response.data)) {
+        matches = response.data;
+      } else if (response.data?.data && typeof response.data.data === 'object' && !Array.isArray(response.data.data)) {
+        // Sometimes API returns { data: { matches: [...] } }
+        matches = response.data.data.matches || response.data.data.data || [];
+      }
+      
+      this.logger.log(`Live scores endpoint returned ${matches.length} matches (after parsing)`, 'SportsMonksService');
       
       if (matches.length > 0) {
+        // Log detailed structure of first match to verify API response format
+        const firstMatch = matches[0];
+        this.logger.log(`=== SPORTSMONKS V2 API RESPONSE STRUCTURE ===`, 'SportsMonksService');
+        this.logger.log(`First match structure: ${JSON.stringify({
+          id: firstMatch.id,
+          name: firstMatch.name,
+          state_id: firstMatch.state_id,
+          status: firstMatch.status,
+          starting_at: firstMatch.starting_at,
+          localteam_id: firstMatch.localteam_id,
+          visitorteam_id: firstMatch.visitorteam_id,
+          has_localteam: !!firstMatch.localteam,
+          has_visitorteam: !!firstMatch.visitorteam,
+          localteam_name: firstMatch.localteam?.name,
+          visitorteam_name: firstMatch.visitorteam?.name,
+          scoreboards_count: firstMatch.scoreboards?.length || 0,
+          has_venue: !!firstMatch.venue,
+          venue_name: firstMatch.venue?.name,
+          note: firstMatch.note,
+          live: firstMatch.live,
+        }, null, 2)}`, 'SportsMonksService');
+        
+        // Log scoreboards structure if available
+        if (firstMatch.scoreboards && firstMatch.scoreboards.length > 0) {
+          this.logger.log(`Scoreboards structure: ${JSON.stringify(firstMatch.scoreboards.slice(0, 2).map((s: any) => ({
+            scoreboard: s.scoreboard,
+            team_id: s.team_id,
+            type: s.type,
+            total: s.total,
+            wickets: s.wickets,
+            overs: s.overs,
+          })), null, 2)}`, 'SportsMonksService');
+        }
+        
         const sample = matches.slice(0, 3).map((m: any) => ({
           id: m.id,
           state_id: m.state_id,
@@ -80,99 +132,24 @@ export class SportsMonksService {
       
       return matches;
     } catch (error: any) {
-      // If livescores endpoint fails, use fixtures endpoint as fallback
-      // This is more reliable for detecting live matches
+      // Log detailed error information
+      this.logger.error(`=== LIVESCORES ENDPOINT ERROR ===`, 'SportsMonksService');
+      this.logger.error(`Error message: ${error.message}`, '', 'SportsMonksService');
+      this.logger.error(`Error status: ${error.response?.status || 'N/A'}`, '', 'SportsMonksService');
+      this.logger.error(`Error response data: ${JSON.stringify(error.response?.data || {})}`, '', 'SportsMonksService');
+      this.logger.error(`Error stack: ${error.stack}`, '', 'SportsMonksService');
+      
+      // If livescores endpoint fails, DO NOT use fixtures endpoint as fallback
+      // User explicitly requested to use ONLY /livescores for live matches
       // Check for authentication errors (401) or authorization errors (403)
       const errorStatus = error.response?.status;
       const errorMessage = error.response?.data?.message || error.message || '';
       
-      if (errorStatus === 404 || errorStatus === 403 || errorStatus === 401 || 
-          (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('unauthenticated'))) {
-        this.logger.warn(`Live scores endpoint failed (${errorStatus || 'unknown'}: ${errorMessage}), using fixtures endpoint as fallback`, 'SportsMonksService');
-        this.logger.warn(`Live scores endpoint failed (${error.response?.status}), using fixtures endpoint as fallback`, 'SportsMonksService');
-        
-        try {
-          const baseUrl = this.getBaseUrl(sport);
-          // Include venue for fixtures endpoint too
-          const includeParam = sport === 'cricket' 
-            ? 'scoreboards,localteam,visitorteam,venue' 
-            : 'scores,participants';
-          
-          this.logger.log(`Fetching from fixtures endpoint as fallback (v2.0)`, 'SportsMonksService');
-          
-          const response = await firstValueFrom(
-            this.httpService.get(`${baseUrl}/fixtures`, {
-              params: {
-                api_token: this.apiToken,
-                include: includeParam,
-                per_page: 250, // Get more matches to find live ones
-              },
-            }),
-          );
-
-          const allFixtures = response.data?.data || [];
-          this.logger.log(`Fixtures endpoint returned ${allFixtures.length} total matches`, 'SportsMonksService');
-          
-          const now = new Date();
-          // Filter for live matches:
-          // state_id 3 = in progress (live)
-          // state_id 4 = break/paused (still live)
-          // Or matches that have started but not ended
-          const liveMatches = allFixtures.filter((match: any) => {
-            // Check by state_id first
-            if (match.state_id === 3 || match.state_id === 4) {
-              return true;
-            }
-            
-            // Check by time if state_id is not available
-            if (match.starting_at) {
-              const startTime = new Date(match.starting_at);
-              // Match has started
-              if (startTime <= now) {
-                // Match hasn't ended (state_id not 5 or 6)
-                if (match.state_id !== 5 && match.state_id !== 6) {
-                  // Estimate end time (3-8 hours depending on format)
-                  const estimatedDuration = 6 * 60 * 60 * 1000; // 6 hours default
-                  const endTime = match.ending_at ? new Date(match.ending_at) : new Date(startTime.getTime() + estimatedDuration);
-                  // Match is still within estimated duration
-                  if (now <= endTime) {
-                    return true;
-                  }
-                }
-              }
-            }
-            return false;
-          });
-
-          this.logger.log(`Found ${liveMatches.length} live matches from fixtures fallback`, 'SportsMonksService');
-          
-          if (liveMatches.length > 0) {
-            const sample = liveMatches.slice(0, 3).map((m: any) => ({
-              id: m.id,
-              state_id: m.state_id,
-              date: m.starting_at,
-              name: m.name || `${m.localteam?.name || 'T1'} vs ${m.visitorteam?.name || 'T2'}`,
-            }));
-            this.logger.log(`Sample live matches from fixtures: ${JSON.stringify(sample, null, 2)}`, 'SportsMonksService');
-          }
-
-          // No caching - return fresh data
-          return liveMatches;
-        } catch (fallbackError: any) {
-          this.logger.error(`Fixtures fallback also failed: ${fallbackError.message}`, fallbackError.stack, 'SportsMonksService');
-          if (fallbackError.response) {
-            this.logger.error(`Fallback error status: ${fallbackError.response.status}`, '', 'SportsMonksService');
-            this.logger.error(`Fallback error response: ${JSON.stringify(fallbackError.response.data)}`, '', 'SportsMonksService');
-          }
-          return [];
-        }
-      }
-      this.logger.error(`Error fetching live ${sport} matches`, error.stack, 'SportsMonksService');
-      if (error.response) {
-        this.logger.error(`Error status: ${error.response.status}`, '', 'SportsMonksService');
-        this.logger.error(`Error response: ${JSON.stringify(error.response.data)}`, '', 'SportsMonksService');
-      }
-      throw error;
+      // User explicitly requested to use ONLY /livescores for live matches
+      // Do NOT use fixtures fallback
+      this.logger.error(`Live scores endpoint failed. NOT using fixtures fallback per user request.`, 'SportsMonksService');
+      // Return empty array instead of throwing or using fallback
+      return [];
     }
   }
 
@@ -187,56 +164,76 @@ export class SportsMonksService {
     try {
       // No caching - always fetch fresh data
       const baseUrl = this.getBaseUrl(sport);
-      const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam' : 'scores,participants';
+      const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam,venue' : 'scores,participants';
+      
+      // For v2.0 API, use the scores/results endpoint for completed matches
+      // This is separate from the livescores endpoint
+      let allMatches: any[] = [];
       
       // Calculate date range for last 7 days
       const now = new Date();
       const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       const currentYear = now.getFullYear();
       
-      // For v2.0 API, use regular fixtures endpoint and filter client-side
-      // The date endpoint may not be available or may not work as expected
-      let allMatches: any[] = [];
-      
       try {
-        this.logger.log(`Calling SportMonks API: ${baseUrl}/fixtures`, 'SportsMonksService');
-        const response = await firstValueFrom(
-          this.httpService.get(`${baseUrl}/fixtures`, {
-            params: {
-              api_token: this.apiToken,
-              include: includeParam,
-              per_page: 250,
-            },
-          }),
-        );
-        
-        // Log full response structure for debugging
-        this.logger.log(`API Response keys: ${JSON.stringify(Object.keys(response.data || {}))}`, 'SportsMonksService');
-        
-        allMatches = response.data?.data || [];
-        this.logger.log(`Regular fixtures endpoint returned ${allMatches.length} total matches`, 'SportsMonksService');
-        
-        // Log response structure
-        if (allMatches.length === 0) {
-          this.logger.warn(`No matches returned. Full response: ${JSON.stringify(response.data, null, 2)}`, 'SportsMonksService');
-        } else {
-          // Log sample matches to see what we're getting
-          const sample = allMatches.slice(0, 5).map((m: any) => ({
-            id: m.id,
-            date: m.starting_at,
-            state_id: m.state_id,
-            name: m.name || `${m.localteam?.name || 'T1'} vs ${m.visitorteam?.name || 'T2'}`,
-            league: m.league?.name || m.season?.name || 'Unknown',
-          }));
-          this.logger.log(`Sample matches from API: ${JSON.stringify(sample, null, 2)}`, 'SportsMonksService');
+        // Try scores endpoint first (for completed matches with results)
+        this.logger.log(`Calling SportMonks API: ${baseUrl}/scores`, 'SportsMonksService');
+        try {
+          const scoresResponse = await firstValueFrom(
+            this.httpService.get(`${baseUrl}/scores`, {
+              params: {
+                api_token: this.apiToken,
+                include: includeParam,
+                per_page: 250,
+              },
+            }),
+          );
           
-          // Log state_id distribution
-          const stateIds = allMatches.map((m: any) => m.state_id).filter((id: any) => id !== undefined);
-          const stateIdCounts = stateIds.reduce((acc: any, id: any) => {
-            acc[id] = (acc[id] || 0) + 1;
-            return acc;
-          }, {});
-          this.logger.log(`State ID distribution: ${JSON.stringify(stateIdCounts)}`, 'SportsMonksService');
+          allMatches = scoresResponse.data?.data || [];
+          this.logger.log(`Scores endpoint returned ${allMatches.length} matches`, 'SportsMonksService');
+        } catch (scoresError: any) {
+          // If scores endpoint doesn't exist or fails, fall back to fixtures endpoint
+          this.logger.warn(`Scores endpoint failed (${scoresError.response?.status || 'unknown'}), using fixtures endpoint as fallback`, 'SportsMonksService');
+          
+          this.logger.log(`Calling SportMonks API: ${baseUrl}/fixtures`, 'SportsMonksService');
+          const response = await firstValueFrom(
+            this.httpService.get(`${baseUrl}/fixtures`, {
+              params: {
+                api_token: this.apiToken,
+                include: includeParam,
+                per_page: 250,
+              },
+            }),
+          );
+        
+          // Log full response structure for debugging
+          this.logger.log(`API Response keys: ${JSON.stringify(Object.keys(response.data || {}))}`, 'SportsMonksService');
+          
+          allMatches = response.data?.data || [];
+          this.logger.log(`Regular fixtures endpoint returned ${allMatches.length} total matches`, 'SportsMonksService');
+          
+          // Log response structure
+          if (allMatches.length === 0) {
+            this.logger.warn(`No matches returned. Full response: ${JSON.stringify(response.data, null, 2)}`, 'SportsMonksService');
+          } else {
+            // Log sample matches to see what we're getting
+            const sample = allMatches.slice(0, 5).map((m: any) => ({
+              id: m.id,
+              date: m.starting_at,
+              state_id: m.state_id,
+              name: m.name || `${m.localteam?.name || 'T1'} vs ${m.visitorteam?.name || 'T2'}`,
+              league: m.league?.name || m.season?.name || 'Unknown',
+            }));
+            this.logger.log(`Sample matches from API: ${JSON.stringify(sample, null, 2)}`, 'SportsMonksService');
+            
+            // Log state_id distribution
+            const stateIds = allMatches.map((m: any) => m.state_id).filter((id: any) => id !== undefined);
+            const stateIdCounts = stateIds.reduce((acc: any, id: any) => {
+              acc[id] = (acc[id] || 0) + 1;
+              return acc;
+            }, {});
+            this.logger.log(`State ID distribution: ${JSON.stringify(stateIdCounts)}`, 'SportsMonksService');
+          }
         }
       } catch (error: any) {
         this.logger.error(

@@ -24,9 +24,9 @@ export class CricketController {
   @ApiResponse({ status: 200, description: 'Live matches retrieved successfully' })
   async getLiveMatches() {
     // Always fetch fresh data - no caching
-    const matches = await this.cricketService.getLiveMatches();
-    // Return as array for frontend compatibility
-    return Array.isArray(matches) ? matches : [];
+    const result = await this.cricketService.getLiveMatches();
+    // Service returns { success: true, data: matches[] }
+    return result;
   }
 
   @Public()
