@@ -48,14 +48,14 @@ export class MatchSchedulerService implements OnModuleInit {
       }
     }, 30000); // 30 seconds
 
-    // 2. Update live matches every 30 seconds (more frequent for real-time updates)
+    // 2. Update live matches every 15 seconds (more frequent for real-time updates of current batters/bowlers)
     this.liveUpdateInterval = setInterval(async () => {
       try {
         await this.liveMatchService.fetchAndUpdateLiveMatches();
       } catch (error: any) {
         this.logger.error('Error in live match update scheduler', error.stack, 'MatchSchedulerService');
       }
-    }, 30000); // 30 seconds - more frequent updates for current batters/bowlers
+    }, 15000); // 15 seconds - more frequent updates for current batters/bowlers
 
     // 3. Sync completed matches every hour
     this.completedSyncInterval = setInterval(async () => {
