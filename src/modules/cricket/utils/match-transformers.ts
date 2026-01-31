@@ -1220,13 +1220,50 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       const currentScoreboardId = currentInningsScoreboard?.scoreboard || null;
       console.log('[Transformer] API status:', matchStatus, 'Current batting team_id:', currentBattingTeamId, 'Current innings scoreboard:', currentScoreboardId, 'overs:', currentInningsScoreboard?.overs, 'updated_at:', currentInningsScoreboard?.updated_at);
       
+      // CRITICAL: If we can't determine current innings scoreboard, try fallback: find scoreboard with most recent active batters
+      let finalScoreboardId = currentScoreboardId;
+      if (!finalScoreboardId && apiMatch.scoreboards && Array.isArray(apiMatch.scoreboards)) {
+        // Find scoreboard with active batters (most recent updated_at)
+        const scoreboardsWithActiveBatters = apiMatch.scoreboards
+          .filter((sb: any) => {
+            if (sb.type !== 'total' || sb.overs === 0) return false;
+            // Check if this scoreboard has any active batters
+            const hasActiveBatters = battingData.some((b: any) => {
+              const isActive = b.active === true;
+              const isFromThisScoreboard = b.scoreboard === sb.scoreboard;
+              const hasBatsmanoutId = b.batsmanout_id !== undefined && b.batsmanout_id !== null && b.batsmanout_id !== 0;
+              const hasCatchStump = b.catch_stump_player_id !== undefined && b.catch_stump_player_id !== null && b.catch_stump_player_id !== 0;
+              const hasRunout = b.runout_by_id !== undefined && b.runout_by_id !== null && b.runout_by_id !== 0;
+              const isOut = hasBatsmanoutId || hasCatchStump || hasRunout;
+              return isFromThisScoreboard && isActive && !isOut;
+            });
+            return hasActiveBatters;
+          })
+          .sort((a: any, b: any) => {
+            const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+            const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+            return bTime - aTime;
+          });
+        
+        if (scoreboardsWithActiveBatters.length > 0) {
+          finalScoreboardId = scoreboardsWithActiveBatters[0].scoreboard;
+          console.log('[Transformer] Using fallback scoreboard:', finalScoreboardId, 'for active batters');
+        }
+      }
+      
+      // If still no scoreboard ID, return undefined (can't determine current innings)
+      if (!finalScoreboardId) {
+        console.log('[Transformer] Cannot determine current innings scoreboard, returning undefined for current batters');
+        return undefined;
+      }
+      
       // Filter for current batters - ONLY from current innings AND actually active
       // CRITICAL: Only include batters who are ACTUALLY currently batting
       // The API's `active` field is the most reliable indicator - if active=false, they're NOT currently batting
       const currentBatsmen = battingData
         .filter((b: any) => {
-          // Only include batters from current innings
-          const isFromCurrentInnings = !currentScoreboardId || b.scoreboard === currentScoreboardId;
+          // CRITICAL: Must be from current innings scoreboard (strict check)
+          const isFromCurrentInnings = b.scoreboard === finalScoreboardId;
           
           // Get the team_id of the current innings
           const currentInningsTeamId = currentInningsScoreboard?.team_id;
@@ -1244,7 +1281,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
           const isOut = hasBatsmanoutId || hasCatchStump || hasRunout;
           
           // CRITICAL: Only include batters who are:
-          // 1. From current innings (scoreboard matches)
+          // 1. From current innings (scoreboard matches) - STRICT CHECK
           // 2. From current team
           // 3. NOT out (checked using all dismissal indicators)
           // 4. ACTIVE (active === true) - this is the most reliable indicator of current batters
@@ -1257,7 +1294,10 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
             console.log('[Transformer] Found current batter:', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'score:', b.score, 'ball:', b.ball, 'isOut:', isOut);
           } else if (isFromCurrentInnings && isFromCurrentTeam && !isOut) {
             // Log why batter was excluded (for debugging)
-            console.log('[Transformer] Excluded batter (not active):', b.player_id, 'active:', b.active, 'score:', b.score, 'ball:', b.ball);
+            console.log('[Transformer] Excluded batter (not active):', b.player_id, 'active:', b.active, 'score:', b.score, 'ball:', b.ball, 'scoreboard:', b.scoreboard);
+          } else if (b.active === true && !isOut) {
+            // Log batters that are active but from wrong innings
+            console.log('[Transformer] Excluded batter (wrong innings):', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'expected:', finalScoreboardId);
           }
           return result;
         })
@@ -1389,13 +1429,47 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       const currentScoreboardId = currentInningsScoreboard?.scoreboard || null;
       console.log('[Transformer] API status:', matchStatus, 'Current batting team_id:', currentBattingTeamId, 'Current innings scoreboard for bowling:', currentScoreboardId, 'overs:', currentInningsScoreboard?.overs, 'updated_at:', currentInningsScoreboard?.updated_at);
       
+      // CRITICAL: If we can't determine current innings scoreboard, try fallback: find scoreboard with most recent active bowlers
+      let finalScoreboardId = currentScoreboardId;
+      if (!finalScoreboardId && apiMatch.scoreboards && Array.isArray(apiMatch.scoreboards)) {
+        // Find scoreboard with active bowlers (most recent updated_at)
+        const scoreboardsWithActiveBowlers = apiMatch.scoreboards
+          .filter((sb: any) => {
+            if (sb.type !== 'total' || sb.overs === 0) return false;
+            // Check if this scoreboard has any active bowlers
+            const hasActiveBowlers = bowlingData.some((b: any) => {
+              const isActive = b.active === true;
+              const isFromThisScoreboard = b.scoreboard === sb.scoreboard;
+              const hasOvers = b.overs > 0;
+              return isFromThisScoreboard && isActive && hasOvers;
+            });
+            return hasActiveBowlers;
+          })
+          .sort((a: any, b: any) => {
+            const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+            const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+            return bTime - aTime;
+          });
+        
+        if (scoreboardsWithActiveBowlers.length > 0) {
+          finalScoreboardId = scoreboardsWithActiveBowlers[0].scoreboard;
+          console.log('[Transformer] Using fallback scoreboard:', finalScoreboardId, 'for active bowlers');
+        }
+      }
+      
+      // If still no scoreboard ID, return undefined (can't determine current innings)
+      if (!finalScoreboardId) {
+        console.log('[Transformer] Cannot determine current innings scoreboard, returning undefined for current bowlers');
+        return undefined;
+      }
+      
       // Filter for current bowlers - ONLY from current innings AND actually active
       // CRITICAL: Only include bowlers who are ACTUALLY currently bowling
       // The API's `active` field is the most reliable indicator - if active=false, they're NOT currently bowling
       const currentBowlers = bowlingData
         .filter((b: any) => {
-          // Only include bowlers from current innings
-          const isFromCurrentInnings = !currentScoreboardId || b.scoreboard === currentScoreboardId;
+          // CRITICAL: Must be from current innings scoreboard (strict check)
+          const isFromCurrentInnings = b.scoreboard === finalScoreboardId;
           
           // Get the team_id of the current innings (batting team)
           // The bowling team is the opposite team
@@ -1403,7 +1477,7 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
           const isFromBowlingTeam = !currentInningsTeamId || b.team_id !== currentInningsTeamId;
           
           // CRITICAL: Only include bowlers who are:
-          // 1. From current innings (scoreboard matches)
+          // 1. From current innings (scoreboard matches) - STRICT CHECK
           // 2. From bowling team (opposite of batting team)
           // 3. ACTIVE (active === true) - this is the most reliable indicator of current bowlers
           //    If API doesn't set active=true, they're NOT currently bowling
@@ -1416,7 +1490,10 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
             console.log('[Transformer] Found current bowler:', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'overs:', b.overs, 'wickets:', b.wickets);
           } else if (isFromCurrentInnings && isFromBowlingTeam && hasOvers) {
             // Log why bowler was excluded (for debugging)
-            console.log('[Transformer] Excluded bowler (not active):', b.player_id, 'active:', b.active, 'overs:', b.overs, 'wickets:', b.wickets);
+            console.log('[Transformer] Excluded bowler (not active):', b.player_id, 'active:', b.active, 'overs:', b.overs, 'wickets:', b.wickets, 'scoreboard:', b.scoreboard);
+          } else if (b.active === true && hasOvers) {
+            // Log bowlers that are active but from wrong innings
+            console.log('[Transformer] Excluded bowler (wrong innings):', b.player_id, 'active:', b.active, 'scoreboard:', b.scoreboard, 'expected:', finalScoreboardId);
           }
           return result;
         })
