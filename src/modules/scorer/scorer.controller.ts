@@ -1,5 +1,5 @@
-import { Controller, Post, Get, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Post, Get, Body, Query, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { ScorerService } from './scorer.service';
 import { ScorerRegistrationDto } from './dto/scorer-registration.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -37,11 +37,30 @@ export class ScorerController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get scorer matches' })
+  @ApiQuery({ name: 'status', required: false, enum: ['upcoming', 'live', 'completed'] })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiResponse({ status: 200, description: 'Scorer matches retrieved successfully' })
-  async getMatches(@CurrentUser() user: UserDocument) {
-    return this.scorerService.getScorerMatches(user._id.toString());
+  async getMatches(
+    @CurrentUser() user: UserDocument,
+    @Query('status') status?: 'upcoming' | 'live' | 'completed',
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.scorerService.getScorerMatches(user._id.toString(), {
+      status,
+      page: page ? parseInt(page.toString()) : undefined,
+      limit: limit ? parseInt(limit.toString()) : undefined,
+      startDate,
+      endDate,
+    });
   }
 }
+
 
 
 
