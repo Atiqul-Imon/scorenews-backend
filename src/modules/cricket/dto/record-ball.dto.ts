@@ -74,6 +74,11 @@ class DeliveryDto {
   @IsBoolean()
   @IsOptional()
   isSix?: boolean;
+
+  @ApiPropertyOptional({ description: 'Is this a free hit delivery?' })
+  @IsBoolean()
+  @IsOptional()
+  isFreeHit?: boolean;
 }
 
 export class RecordBallDto {

@@ -447,11 +447,10 @@ export class LocalMatchService {
       };
     }
 
-    // Calculate runs to add (extras add 1, normal runs add the run value)
+    // Calculate runs to add
+    // Wide/No-ball: The runs value includes base 1 + additional runs (e.g., wide 4 = 5 total runs)
+    // Normal/Bye/Leg-bye: Use the run value as-is
     let runsToAdd = ballDto.delivery.runs;
-    if (ballDto.delivery.ballType === 'wide' || ballDto.delivery.ballType === 'no_ball') {
-      runsToAdd = 1; // Extras always add 1 run
-    }
 
     // Update batting team score
     match.currentScore[battingTeam].runs += runsToAdd;
@@ -481,12 +480,14 @@ export class LocalMatchService {
     if (ballDto.delivery.isWicket && ballDto.delivery.incomingBatterId) {
       newStrikerId = ballDto.delivery.incomingBatterId;
     } else if (ballDto.delivery.ballType !== 'wide' && ballDto.delivery.ballType !== 'no_ball') {
-      // Normal delivery - check for strike rotation
+      // Normal delivery (normal, bye, leg_bye) - check for strike rotation
+      // Bye and leg_bye: strike rotates on odd runs even though runs don't count to batter
       if (ballDto.delivery.runs % 2 === 1) {
         // Odd runs - swap strike
         [newStrikerId, newNonStrikerId] = [newNonStrikerId, newStrikerId];
       }
     }
+    // Wide and no-ball: No strike rotation
 
     // Increment ball (if not wide/no-ball)
     if (ballDto.delivery.ballType !== 'wide' && ballDto.delivery.ballType !== 'no_ball') {
@@ -503,6 +504,38 @@ export class LocalMatchService {
     match.liveState.currentBall = nextBall;
     match.liveState.strikerId = newStrikerId;
     match.liveState.nonStrikerId = newNonStrikerId;
+
+    // Calculate current run rate
+    const teamTotalOvers = match.currentScore[battingTeam].overs + (match.currentScore[battingTeam].balls / 6);
+    match.liveState.currentRunRate = teamTotalOvers > 0 
+      ? (match.currentScore[battingTeam].runs / teamTotalOvers) 
+      : 0;
+
+    // Calculate partnership (will be updated after batting stats are updated below)
+
+    // Calculate required run rate for chases (second innings)
+    if (ballDto.innings === 2) {
+      // Get first innings total
+      const firstInningsBattingTeam = battingTeam === 'home' ? 'away' : 'home';
+      const firstInningsTotal = match.currentScore[firstInningsBattingTeam]?.runs || 0;
+      match.liveState.target = firstInningsTotal + 1; // Target is first innings total + 1
+
+      const currentRuns = match.currentScore[battingTeam].runs;
+      const runsNeeded = Math.max(0, match.liveState.target - currentRuns);
+      const maxOvers = match.format?.toLowerCase().includes('t20') ? 20 : 
+                      match.format?.toLowerCase().includes('odi') ? 50 : undefined;
+      
+      if (maxOvers) {
+        const oversRemaining = maxOvers - teamTotalOvers;
+        match.liveState.requiredRunRate = oversRemaining > 0 
+          ? (runsNeeded / oversRemaining) 
+          : 0;
+      }
+    } else {
+      // First innings - no required rate
+      match.liveState.requiredRunRate = undefined;
+      match.liveState.target = undefined;
+    }
 
     // Update batting stats
     if (!match.battingStats) {
@@ -529,14 +562,25 @@ export class LocalMatchService {
       match.battingStats.push(strikerStats);
     }
 
-    if (ballDto.delivery.ballType === 'normal' || ballDto.delivery.ballType === 'leg_bye') {
-      strikerStats.runs += ballDto.delivery.runs;
+    // Update striker stats for legal deliveries (normal, bye, leg_bye)
+    // Wides and no-balls don't count as balls faced by batter
+    if (ballDto.delivery.ballType === 'normal' || ballDto.delivery.ballType === 'bye' || ballDto.delivery.ballType === 'leg_bye') {
+      // For bye and leg_bye, runs don't count to batter
+      if (ballDto.delivery.ballType === 'normal') {
+        strikerStats.runs += ballDto.delivery.runs;
+      }
       strikerStats.balls += 1;
-      if (ballDto.delivery.isSix) {
+      
+      // Auto-detect boundaries
+      if (ballDto.delivery.isSix || ballDto.delivery.runs === 6) {
         strikerStats.sixes += 1;
-      } else if (ballDto.delivery.isBoundary) {
+        if (ballDto.delivery.ballType === 'normal') {
+          strikerStats.runs += 6; // Already added above, but ensure it's counted
+        }
+      } else if (ballDto.delivery.isBoundary || ballDto.delivery.runs === 4) {
         strikerStats.fours += 1;
       }
+      
       strikerStats.strikeRate = strikerStats.balls > 0 ? (strikerStats.runs / strikerStats.balls) * 100 : 0;
     }
 
@@ -548,6 +592,32 @@ export class LocalMatchService {
       strikerStats.fowScore = match.currentScore[battingTeam].runs;
       strikerStats.fowBalls = match.currentScore[battingTeam].overs * 6 + match.currentScore[battingTeam].balls;
     }
+
+    // Update non-striker stats (for partnership calculation)
+    let nonStrikerStats = match.battingStats.find(
+      (s) => s.playerId === ballDto.nonStrikerId && s.innings === ballDto.innings && s.team === battingTeam,
+    );
+    if (!nonStrikerStats) {
+      nonStrikerStats = {
+        innings: ballDto.innings,
+        team: battingTeam,
+        playerId: ballDto.nonStrikerId,
+        playerName: '',
+        runs: 0,
+        balls: 0,
+        fours: 0,
+        sixes: 0,
+        strikeRate: 0,
+        isOut: false,
+      };
+      match.battingStats.push(nonStrikerStats);
+    }
+
+    // Calculate partnership from updated stats
+    // Partnership runs = sum of both current batters' runs in this innings
+    match.liveState.partnershipRuns = (strikerStats.runs || 0) + (nonStrikerStats.runs || 0);
+    // Partnership balls = total balls faced by both batters
+    match.liveState.partnershipBalls = (strikerStats.balls || 0) + (nonStrikerStats.balls || 0);
 
     // Update bowling stats
     if (!match.bowlingStats) {
