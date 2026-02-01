@@ -324,4 +324,69 @@ export class CricketController {
       data: match,
     };
   }
+
+  @Post('local/matches/:id/second-innings')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Start second innings' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Second innings started successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async startSecondInnings(
+    @Param('id') id: string,
+    @Body() body: { openingBatter1Id: string; openingBatter2Id: string; firstBowlerId: string },
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.startSecondInnings(
+      id,
+      body.openingBatter1Id,
+      body.openingBatter2Id,
+      body.firstBowlerId,
+      user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Post('local/matches/:id/complete')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Complete and lock match' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Match completed successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async completeMatch(
+    @Param('id') id: string,
+    @Body() body: {
+      winner?: 'home' | 'away' | 'tie' | 'no_result';
+      margin?: string;
+      keyPerformers?: Array<{ playerId: string; playerName: string; role: string; performance: string }>;
+      notes?: string;
+    },
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.completeMatch(
+      id,
+      user.scorerProfile.scorerId,
+      body,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
 }

@@ -311,6 +311,7 @@ export class LocalMatch {
       playerId: { type: String, required: true },
       playerName: { type: String, required: true },
       overs: { type: Number, default: 0 },
+      balls: { type: Number, default: 0 },
       maidens: { type: Number, default: 0 },
       runs: { type: Number, default: 0 },
       wickets: { type: Number, default: 0 },
@@ -325,6 +326,7 @@ export class LocalMatch {
     playerId: string;
     playerName: string;
     overs: number;
+    balls?: number;
     maidens: number;
     runs: number;
     wickets: number;
