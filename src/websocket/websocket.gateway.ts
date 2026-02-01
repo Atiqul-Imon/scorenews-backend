@@ -19,20 +19,22 @@ function getCorsOrigins(): string[] {
 }
 
 @WebSocketGateway({
-  cors: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    const corsOrigins = getCorsOrigins();
-    
-    // Allow requests with no origin (like mobile apps or curl requests)
-    // Allow if origin is in whitelist or if '*' is in whitelist
-    if (!origin || corsOrigins.includes(origin) || corsOrigins.includes('*')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+  cors: {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      const corsOrigins = getCorsOrigins();
+      
+      // Allow requests with no origin (like mobile apps or curl requests)
+      // Allow if origin is in whitelist or if '*' is in whitelist
+      if (!origin || corsOrigins.includes(origin) || corsOrigins.includes('*')) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   },
-  credentials: true,
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
   namespace: '/live',
   transports: ['websocket', 'polling'], // Explicitly allow both transports
   allowEIO3: true, // Allow Engine.IO v3 clients

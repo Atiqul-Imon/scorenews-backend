@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Param, Query, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, Query, Body, UseGuards, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { CricketService } from './cricket.service';
 import { GetMatchesDto } from './dto/get-matches.dto';
@@ -13,6 +13,8 @@ import { UserDocument } from '../users/schemas/user.schema';
 @ApiTags('cricket')
 @Controller('cricket')
 export class CricketController {
+  private readonly logger = new Logger(CricketController.name);
+
   constructor(
     private readonly cricketService: CricketService,
     private readonly localMatchService: LocalMatchService,
@@ -116,30 +118,54 @@ export class CricketController {
   @ApiOperation({ summary: 'Create a new local match' })
   @ApiResponse({ status: 201, description: 'Match created successfully' })
   @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({ status: 403, description: 'User is not a registered scorer' })
   async createLocalMatch(
     @Body() createDto: CreateLocalMatchDto,
     @CurrentUser() user: UserDocument,
   ) {
-    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
-      throw new Error('User is not a registered scorer');
+    this.logger.log(`Creating local match for user: ${user.email} (${user._id})`);
+    
+    // Check if user has scorer profile
+    if (!user.scorerProfile) {
+      this.logger.warn(`User ${user.email} does not have scorerProfile`);
+      throw new ForbiddenException('User is not a registered scorer. Please register as a scorer first.');
     }
 
-    const match = await this.localMatchService.createMatch(
-      createDto,
-      user.scorerProfile.scorerId,
-      user.name,
-      user.scorerProfile.scorerType || 'community',
-    );
+    if (!user.scorerProfile.isScorer) {
+      this.logger.warn(`User ${user.email} scorerProfile.isScorer is false`);
+      throw new ForbiddenException('User is not a registered scorer. Please register as a scorer first.');
+    }
 
-    return {
-      success: true,
-      data: match,
-    };
+    if (!user.scorerProfile.scorerId) {
+      this.logger.warn(`User ${user.email} does not have scorerId`);
+      throw new ForbiddenException('User scorer profile is incomplete. Please contact support.');
+    }
+
+    this.logger.log(`User ${user.email} is a scorer (ID: ${user.scorerProfile.scorerId}, Type: ${user.scorerProfile.scorerType})`);
+
+    try {
+      const match = await this.localMatchService.createMatch(
+        createDto,
+        user.scorerProfile.scorerId,
+        user.name,
+        user.scorerProfile.scorerType || 'community',
+      );
+
+      this.logger.log(`Match created successfully: ${match.matchId} by scorer ${user.scorerProfile.scorerId}`);
+
+      return {
+        success: true,
+        data: match,
+      };
+    } catch (error: any) {
+      this.logger.error(`Error creating match for user ${user.email}:`, error.stack);
+      throw error; // Re-throw to let NestJS handle it
+    }
   }
 
   @Get('local/matches')
   @Public()
-  @ApiOperation({ summary: 'Get local matches with filters' })
+  @ApiOperation({ summary: 'Get local matches with filters (only verified matches)' })
   @ApiResponse({ status: 200, description: 'Local matches retrieved successfully' })
   async getLocalMatches(
     @Query('city') city?: string,
@@ -148,13 +174,17 @@ export class CricketController {
     @Query('status') status?: string,
     @Query('limit') limit?: number,
   ) {
-    const matches = await this.localMatchService.getLocalMatches({
-      city,
-      district,
-      area,
-      status,
-      limit: limit ? parseInt(limit.toString()) : undefined,
-    });
+    // Public endpoint only returns verified matches
+    const matches = await this.localMatchService.getLocalMatches(
+      {
+        city,
+        district,
+        area,
+        status,
+        limit: limit ? parseInt(limit.toString()) : undefined,
+      },
+      false, // includeUnverified = false for public endpoints
+    );
 
     return {
       success: true,
@@ -164,12 +194,13 @@ export class CricketController {
 
   @Get('local/matches/:id')
   @Public()
-  @ApiOperation({ summary: 'Get local match by ID' })
+  @ApiOperation({ summary: 'Get local match by ID (only verified matches)' })
   @ApiParam({ name: 'id', description: 'Match ID' })
   @ApiResponse({ status: 200, description: 'Match retrieved successfully' })
   @ApiResponse({ status: 404, description: 'Match not found' })
   async getLocalMatchById(@Param('id') id: string) {
-    const match = await this.localMatchService.getMatchById(id);
+    // Public endpoint only returns verified matches
+    const match = await this.localMatchService.getMatchById(id, false);
     return {
       success: true,
       data: match,

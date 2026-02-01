@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
@@ -8,7 +8,9 @@ import { NewsArticle, NewsArticleSchema } from '../news/schemas/news-article.sch
 import { Thread, ThreadSchema } from '../threads/schemas/thread.schema';
 import { Comment, CommentSchema } from '../comments/schemas/comment.schema';
 import { CricketMatch, CricketMatchSchema } from '../cricket/schemas/cricket-match.schema';
+import { LocalMatch, LocalMatchSchema } from '../cricket/schemas/local-match.schema';
 import { LoggerModule } from '../../common/logger/logger.module';
+import { CricketModule } from '../cricket/cricket.module';
 
 @Module({
   imports: [
@@ -19,8 +21,10 @@ import { LoggerModule } from '../../common/logger/logger.module';
       { name: Thread.name, schema: ThreadSchema },
       { name: Comment.name, schema: CommentSchema },
       { name: CricketMatch.name, schema: CricketMatchSchema },
+      { name: LocalMatch.name, schema: LocalMatchSchema },
     ]),
     LoggerModule,
+    forwardRef(() => CricketModule),
   ],
   controllers: [AdminController],
   providers: [AdminService],

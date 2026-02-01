@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Put, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -115,5 +115,71 @@ export class AdminController {
       startDate,
       endDate,
     });
+  }
+
+  // Local Match Management Endpoints
+  @Get('local-matches')
+  @ApiOperation({ summary: 'Get all local matches with filters' })
+  @ApiResponse({ status: 200, description: 'Local matches retrieved successfully' })
+  async getAllLocalMatches(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 20,
+    @Query('status') status?: string,
+    @Query('city') city?: string,
+    @Query('district') district?: string,
+    @Query('scorerId') scorerId?: string,
+    @Query('isVerified') isVerified?: string,
+    @Query('search') search?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.adminService.getAllLocalMatches(page, limit, {
+      status,
+      city,
+      district,
+      scorerId,
+      isVerified: isVerified === 'true' ? true : isVerified === 'false' ? false : undefined,
+      search,
+      startDate,
+      endDate,
+    });
+  }
+
+  @Get('local-matches/:id')
+  @ApiOperation({ summary: 'Get local match details by ID' })
+  @ApiResponse({ status: 200, description: 'Local match details retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Local match not found' })
+  async getLocalMatchById(@Param('id') matchId: string) {
+    return this.adminService.getLocalMatchById(matchId);
+  }
+
+  @Put('local-matches/:id/verify')
+  @ApiOperation({ summary: 'Verify or unverify a local match' })
+  @ApiResponse({ status: 200, description: 'Match verification status updated successfully' })
+  @ApiResponse({ status: 404, description: 'Local match not found' })
+  async updateLocalMatchVerification(
+    @Param('id') matchId: string,
+    @Body('isVerified') isVerified: boolean,
+  ) {
+    return this.adminService.updateLocalMatchVerification(matchId, isVerified);
+  }
+
+  @Put('local-matches/:id')
+  @ApiOperation({ summary: 'Update local match details' })
+  @ApiResponse({ status: 200, description: 'Match updated successfully' })
+  @ApiResponse({ status: 404, description: 'Local match not found' })
+  async updateLocalMatch(
+    @Param('id') matchId: string,
+    @Body() updateData: any,
+  ) {
+    return this.adminService.updateLocalMatch(matchId, updateData);
+  }
+
+  @Delete('local-matches/:id')
+  @ApiOperation({ summary: 'Delete a local match' })
+  @ApiResponse({ status: 200, description: 'Match deleted successfully' })
+  @ApiResponse({ status: 404, description: 'Local match not found' })
+  async deleteLocalMatch(@Param('id') matchId: string) {
+    return this.adminService.deleteLocalMatch(matchId);
   }
 }
