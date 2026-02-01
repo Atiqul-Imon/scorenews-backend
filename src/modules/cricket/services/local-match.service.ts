@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { LocalMatch, LocalMatchDocument } from '../schemas/local-match.schema';
@@ -8,6 +8,8 @@ import * as crypto from 'crypto';
 
 @Injectable()
 export class LocalMatchService {
+  private readonly logger = new Logger(LocalMatchService.name);
+
   constructor(
     @InjectModel(LocalMatch.name) private localMatchModel: Model<LocalMatchDocument>,
   ) {}
@@ -120,17 +122,42 @@ export class LocalMatchService {
       },
     };
 
-    const match = new this.localMatchModel(matchData);
-    await match.save();
+    this.logger.log(`Creating match document with matchId: ${matchId}`);
+    
+    try {
+      const match = new this.localMatchModel(matchData);
+      const savedMatch = await match.save();
+      
+      this.logger.log(`Match saved successfully to database: ${matchId}`);
+      this.logger.debug(`Match document: ${JSON.stringify(savedMatch.toObject(), null, 2)}`);
 
-    return match.toObject();
+      return savedMatch.toObject();
+    } catch (error: any) {
+      this.logger.error(`Error saving match to database: ${error.message}`, error.stack);
+      
+      // Check for duplicate key error
+      if (error.code === 11000) {
+        throw new BadRequestException(`Match with ID ${matchId} already exists`);
+      }
+      
+      throw error;
+    }
   }
 
   /**
    * Get match by ID
+   * @param matchId - Match ID
+   * @param includeUnverified - If true, include unverified matches (for admin). Default: false (public only shows verified)
    */
-  async getMatchById(matchId: string): Promise<LocalMatch> {
-    const match = await this.localMatchModel.findOne({ matchId }).lean();
+  async getMatchById(matchId: string, includeUnverified: boolean = false): Promise<LocalMatch> {
+    const query: any = { matchId };
+    
+    // Public endpoints only show verified matches unless explicitly requested
+    if (!includeUnverified) {
+      query.isVerified = true;
+    }
+    
+    const match = await this.localMatchModel.findOne(query).lean();
     if (!match) {
       throw new NotFoundException(`Match with ID ${matchId} not found`);
     }
@@ -255,15 +282,25 @@ export class LocalMatchService {
 
   /**
    * Get local matches with filters
+   * @param filters - Filter options
+   * @param includeUnverified - If true, include unverified matches (for admin). Default: false (public only shows verified)
    */
-  async getLocalMatches(filters?: {
-    city?: string;
-    district?: string;
-    area?: string;
-    status?: string;
-    limit?: number;
-  }): Promise<LocalMatch[]> {
+  async getLocalMatches(
+    filters?: {
+      city?: string;
+      district?: string;
+      area?: string;
+      status?: string;
+      limit?: number;
+    },
+    includeUnverified: boolean = false,
+  ): Promise<LocalMatch[]> {
     const query: any = { isLocalMatch: true };
+
+    // Public endpoints only show verified matches unless explicitly requested
+    if (!includeUnverified) {
+      query.isVerified = true;
+    }
 
     if (filters?.city) {
       query['localLocation.city'] = new RegExp(filters.city, 'i');

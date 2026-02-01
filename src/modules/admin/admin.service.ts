@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -7,6 +7,8 @@ import { NewsArticle, NewsArticleDocument } from '../news/schemas/news-article.s
 import { Thread, ThreadDocument } from '../threads/schemas/thread.schema';
 import { Comment, CommentDocument } from '../comments/schemas/comment.schema';
 import { CricketMatch, CricketMatchDocument } from '../cricket/schemas/cricket-match.schema';
+import { LocalMatch, LocalMatchDocument } from '../cricket/schemas/local-match.schema';
+import { LocalMatchService } from '../cricket/services/local-match.service';
 import { WinstonLoggerService } from '../../common/logger/winston-logger.service';
 
 @Injectable()
@@ -18,6 +20,9 @@ export class AdminService {
     @InjectModel(Thread.name) private threadModel: Model<ThreadDocument>,
     @InjectModel(Comment.name) private commentModel: Model<CommentDocument>,
     @InjectModel(CricketMatch.name) private cricketMatchModel: Model<CricketMatchDocument>,
+    @InjectModel(LocalMatch.name) private localMatchModel: Model<LocalMatchDocument>,
+    @Inject(forwardRef(() => LocalMatchService))
+    private localMatchService: LocalMatchService,
     private logger: WinstonLoggerService,
   ) {}
 
@@ -379,42 +384,194 @@ export class AdminService {
       'scorerProfile.isScorer': true,
     }).select('scorerProfile');
 
-    if (!scorer || !scorer.scorerProfile) {
+    if (!scorer || !scorer.scorerProfile || !scorer.scorerProfile.scorerId) {
       throw new NotFoundException('Scorer not found');
     }
 
-    const skip = (page - 1) * limit;
-    const filter: any = {
-      'scorerInfo.scorerId': scorer.scorerProfile.scorerId,
+    // Use LocalMatchService to get matches (it queries the correct collection)
+    const result = await this.localMatchService.getMatchesByScorer(
+      scorer.scorerProfile.scorerId,
+      {
+        status: filters?.status as 'upcoming' | 'live' | 'completed' | undefined,
+        page,
+        limit,
+        startDate: filters?.startDate,
+        endDate: filters?.endDate,
+      }
+    );
+
+    return {
+      matches: result.matches,
+      pagination: {
+        current: result.page,
+        pages: Math.ceil(result.total / result.limit),
+        total: result.total,
+        limit: result.limit,
+      },
     };
+  }
+
+  // Local Match Management Methods
+  async getAllLocalMatches(
+    page: number = 1,
+    limit: number = 20,
+    filters?: {
+      status?: string;
+      city?: string;
+      district?: string;
+      scorerId?: string;
+      isVerified?: boolean;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+    },
+  ) {
+    const skip = (page - 1) * limit;
+    const query: any = { isLocalMatch: true };
 
     if (filters?.status) {
-      filter.status = filters.status;
+      query.status = filters.status;
+    }
+
+    if (filters?.city) {
+      query['localLocation.city'] = new RegExp(filters.city, 'i');
+    }
+
+    if (filters?.district) {
+      query['localLocation.district'] = new RegExp(filters.district, 'i');
+    }
+
+    if (filters?.scorerId) {
+      query['scorerInfo.scorerId'] = filters.scorerId;
+    }
+
+    if (filters?.isVerified !== undefined) {
+      query.isVerified = filters.isVerified;
+    }
+
+    if (filters?.search) {
+      query.$or = [
+        { series: new RegExp(filters.search, 'i') },
+        { 'teams.home.name': new RegExp(filters.search, 'i') },
+        { 'teams.away.name': new RegExp(filters.search, 'i') },
+        { 'venue.name': new RegExp(filters.search, 'i') },
+        { matchId: new RegExp(filters.search, 'i') },
+      ];
     }
 
     if (filters?.startDate || filters?.endDate) {
-      filter.startTime = {};
-      if (filters.startDate) filter.startTime.$gte = new Date(filters.startDate);
-      if (filters.endDate) filter.startTime.$lte = new Date(filters.endDate);
+      query.startTime = {};
+      if (filters.startDate) query.startTime.$gte = new Date(filters.startDate);
+      if (filters.endDate) query.startTime.$lte = new Date(filters.endDate);
     }
 
-    const matches = await this.cricketMatchModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    const total = await this.cricketMatchModel.countDocuments(filter);
+    // Admin can see all matches (verified and unverified)
+    // Don't filter by isVerified for admin panel
+    const [matches, total] = await Promise.all([
+      this.localMatchModel
+        .find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.localMatchModel.countDocuments(query),
+    ]);
 
     return {
-      matches,
-      pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
-        total,
-        limit,
+      success: true,
+      data: {
+        matches,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          limit,
+        },
       },
+    };
+  }
+
+  async getLocalMatchById(matchId: string) {
+    try {
+      // Admin can access both verified and unverified matches
+      const match = await this.localMatchService.getMatchById(matchId, true);
+      return {
+        success: true,
+        data: match,
+      };
+    } catch (error: any) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new NotFoundException(`Local match with ID ${matchId} not found`);
+    }
+  }
+
+  async updateLocalMatchVerification(matchId: string, isVerified: boolean) {
+    const match = await this.localMatchModel.findOne({ matchId });
+    
+    if (!match) {
+      throw new NotFoundException(`Local match with ID ${matchId} not found`);
+    }
+
+    match.isVerified = isVerified;
+    if (isVerified) {
+      match.scorerInfo.verificationStatus = 'verified';
+    }
+    await match.save();
+
+    this.logger.log(`Local match ${matchId} verification status updated to ${isVerified}`, 'AdminService');
+
+    return {
+      success: true,
+      message: `Match verification status updated to ${isVerified ? 'verified' : 'unverified'}`,
+      data: {
+        matchId: match.matchId,
+        isVerified: match.isVerified,
+      },
+    };
+  }
+
+  async updateLocalMatch(matchId: string, updateData: any) {
+    const match = await this.localMatchModel.findOne({ matchId });
+    
+    if (!match) {
+      throw new NotFoundException(`Local match with ID ${matchId} not found`);
+    }
+
+    // Allow updating specific fields
+    const allowedFields = ['series', 'status', 'venue', 'localLocation', 'localLeague'];
+    for (const field of allowedFields) {
+      if (updateData[field] !== undefined) {
+        (match as any)[field] = updateData[field];
+      }
+    }
+
+    await match.save();
+
+    this.logger.log(`Local match ${matchId} updated`, 'AdminService');
+
+    return {
+      success: true,
+      message: 'Match updated successfully',
+      data: match.toObject(),
+    };
+  }
+
+  async deleteLocalMatch(matchId: string) {
+    const match = await this.localMatchModel.findOne({ matchId });
+    
+    if (!match) {
+      throw new NotFoundException(`Local match with ID ${matchId} not found`);
+    }
+
+    await this.localMatchModel.deleteOne({ matchId });
+
+    this.logger.log(`Local match ${matchId} deleted`, 'AdminService');
+
+    return {
+      success: true,
+      message: 'Match deleted successfully',
     };
   }
 }
