@@ -1,14 +1,22 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, Query, Body, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { CricketService } from './cricket.service';
 import { GetMatchesDto } from './dto/get-matches.dto';
+import { LocalMatchService } from './services/local-match.service';
+import { CreateLocalMatchDto } from './dto/create-local-match.dto';
+import { UpdateLocalMatchScoreDto } from './dto/update-local-match-score.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { UserDocument } from '../users/schemas/user.schema';
 
 @ApiTags('cricket')
 @Controller('cricket')
 export class CricketController {
-  constructor(private readonly cricketService: CricketService) {}
+  constructor(
+    private readonly cricketService: CricketService,
+    private readonly localMatchService: LocalMatchService,
+  ) {}
 
   @Public()
   @Get('matches')
@@ -99,5 +107,101 @@ export class CricketController {
   @ApiResponse({ status: 200, description: 'Team match statistics retrieved successfully' })
   async getTeamMatches(@Param('teamName') teamName: string) {
     return this.cricketService.getTeamMatches(teamName);
+  }
+
+  // Local Match Endpoints
+  @Post('local/matches')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Create a new local match' })
+  @ApiResponse({ status: 201, description: 'Match created successfully' })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  async createLocalMatch(
+    @Body() createDto: CreateLocalMatchDto,
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new Error('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.createMatch(
+      createDto,
+      user.scorerProfile.scorerId,
+      user.name,
+      user.scorerProfile.scorerType || 'community',
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Get('local/matches')
+  @Public()
+  @ApiOperation({ summary: 'Get local matches with filters' })
+  @ApiResponse({ status: 200, description: 'Local matches retrieved successfully' })
+  async getLocalMatches(
+    @Query('city') city?: string,
+    @Query('district') district?: string,
+    @Query('area') area?: string,
+    @Query('status') status?: string,
+    @Query('limit') limit?: number,
+  ) {
+    const matches = await this.localMatchService.getLocalMatches({
+      city,
+      district,
+      area,
+      status,
+      limit: limit ? parseInt(limit.toString()) : undefined,
+    });
+
+    return {
+      success: true,
+      data: matches,
+    };
+  }
+
+  @Get('local/matches/:id')
+  @Public()
+  @ApiOperation({ summary: 'Get local match by ID' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Match retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  async getLocalMatchById(@Param('id') id: string) {
+    const match = await this.localMatchService.getMatchById(id);
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Put('local/matches/:id/score')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Update local match score' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Score updated successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async updateLocalMatchScore(
+    @Param('id') id: string,
+    @Body() updateDto: UpdateLocalMatchScoreDto,
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new Error('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.updateScore(
+      id,
+      updateDto,
+      user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
   }
 }

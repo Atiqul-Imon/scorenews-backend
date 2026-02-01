@@ -1,14 +1,17 @@
-import { Injectable, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, ConflictException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { ScorerRegistrationDto } from './dto/scorer-registration.dto';
+import { LocalMatchService } from '../cricket/services/local-match.service';
 import * as crypto from 'crypto';
 
 @Injectable()
 export class ScorerService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @Inject(forwardRef(() => LocalMatchService))
+    private localMatchService: LocalMatchService,
   ) {}
 
   async registerScorer(registerDto: ScorerRegistrationDto) {
@@ -94,16 +97,59 @@ export class ScorerService {
     };
   }
 
-  async getScorerMatches(userId: string, filters?: { status?: string; page?: number; limit?: number }) {
-    // This will be implemented when local cricket matches are created
-    // For now, return empty array
+  async getScorerMatches(
+    userId: string,
+    filters?: {
+      status?: 'upcoming' | 'live' | 'completed';
+      page?: number;
+      limit?: number;
+      startDate?: string;
+      endDate?: string;
+    },
+  ) {
+    const user = await this.userModel.findById(userId).select('+scorerProfile');
+    
+    if (!user || !user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new BadRequestException('User is not a registered scorer');
+    }
+
+    const result = await this.localMatchService.getMatchesByScorer(
+      user.scorerProfile.scorerId,
+      filters,
+    );
+
+    // Transform LocalMatch to match frontend expectations
+    const transformedMatches = result.matches.map((match) => ({
+      matchId: match.matchId,
+      series: match.series,
+      matchType: match.matchType,
+      isLocalMatch: match.isLocalMatch,
+      teams: match.teams,
+      venue: match.venue,
+      status: match.status,
+      format: match.format,
+      startTime: match.startTime.toISOString(),
+      endTime: match.endTime?.toISOString(),
+      currentScore: match.currentScore,
+      localLocation: match.localLocation,
+      localLeague: match.localLeague,
+      scorerInfo: match.scorerInfo,
+      isVerified: match.isVerified,
+      matchNote: match.matchNote,
+      createdAt: (match as any).createdAt?.toISOString(),
+      updatedAt: (match as any).updatedAt?.toISOString(),
+    }));
+
     return {
       success: true,
       data: {
-        matches: [],
-        total: 0,
-        page: filters?.page || 1,
-        limit: filters?.limit || 10,
+        data: transformedMatches,
+        pagination: {
+          current: result.page,
+          pages: Math.ceil(result.total / result.limit),
+          total: result.total,
+          limit: result.limit,
+        },
       },
     };
   }
