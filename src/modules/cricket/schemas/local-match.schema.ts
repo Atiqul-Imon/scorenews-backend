@@ -215,6 +215,11 @@ export class LocalMatch {
       currentOver: { type: Number, default: 0 },
       currentBall: { type: Number, default: 0 },
       isInningsBreak: { type: Boolean, default: false },
+      partnershipRuns: { type: Number, default: 0 },
+      partnershipBalls: { type: Number, default: 0 },
+      currentRunRate: { type: Number, default: 0 },
+      requiredRunRate: { type: Number },
+      target: { type: Number },
     },
   })
   liveState?: {
@@ -226,6 +231,11 @@ export class LocalMatch {
     currentOver: number;
     currentBall: number;
     isInningsBreak: boolean;
+    partnershipRuns?: number;
+    partnershipBalls?: number;
+    currentRunRate?: number;
+    requiredRunRate?: number;
+    target?: number;
   };
 
   @Prop({
