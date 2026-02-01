@@ -178,6 +178,185 @@ export class LocalMatch {
     default: 'local',
   })
   matchType: 'international' | 'franchise' | 'local' | 'hyper-local';
+
+  // Ball-by-ball scoring fields
+  @Prop({
+    type: {
+      isSetupComplete: { type: Boolean, default: false },
+      tossWinner: { type: String, enum: ['home', 'away'] },
+      tossDecision: { type: String, enum: ['bat', 'bowl'] },
+      homePlayingXI: [{
+        id: { type: String },
+        name: { type: String },
+        role: { type: String },
+      }],
+      awayPlayingXI: [{
+        id: { type: String },
+        name: { type: String },
+        role: { type: String },
+      }],
+    },
+  })
+  matchSetup?: {
+    isSetupComplete: boolean;
+    tossWinner?: 'home' | 'away';
+    tossDecision?: 'bat' | 'bowl';
+    homePlayingXI?: Array<{ id: string; name: string; role?: string }>;
+    awayPlayingXI?: Array<{ id: string; name: string; role?: string }>;
+  };
+
+  @Prop({
+    type: {
+      currentInnings: { type: Number, default: 1 },
+      battingTeam: { type: String, enum: ['home', 'away'] },
+      strikerId: { type: String },
+      nonStrikerId: { type: String },
+      bowlerId: { type: String },
+      currentOver: { type: Number, default: 0 },
+      currentBall: { type: Number, default: 0 },
+      isInningsBreak: { type: Boolean, default: false },
+    },
+  })
+  liveState?: {
+    currentInnings: number;
+    battingTeam?: 'home' | 'away';
+    strikerId?: string;
+    nonStrikerId?: string;
+    bowlerId?: string;
+    currentOver: number;
+    currentBall: number;
+    isInningsBreak: boolean;
+  };
+
+  @Prop({
+    type: [{
+      innings: { type: Number, required: true },
+      over: { type: Number, required: true },
+      ball: { type: Number, required: true },
+      strikerId: { type: String, required: true },
+      nonStrikerId: { type: String, required: true },
+      bowlerId: { type: String, required: true },
+      runs: { type: Number, default: 0 },
+      ballType: { type: String, enum: ['normal', 'wide', 'no_ball', 'bye', 'leg_bye'], default: 'normal' },
+      isWicket: { type: Boolean, default: false },
+      dismissalType: { type: String, enum: ['bowled', 'caught', 'lbw', 'run_out', 'stumped', 'hit_wicket', 'retired_hurt', 'retired_out', 'handled_ball', 'obstructing_field', 'timed_out'] },
+      dismissedBatterId: { type: String },
+      fielderId: { type: String },
+      incomingBatterId: { type: String },
+      isBoundary: { type: Boolean, default: false },
+      isSix: { type: Boolean, default: false },
+      timestamp: { type: Date, default: Date.now },
+    }],
+  })
+  ballHistory?: Array<{
+    innings: number;
+    over: number;
+    ball: number;
+    strikerId: string;
+    nonStrikerId: string;
+    bowlerId: string;
+    runs: number;
+    ballType: 'normal' | 'wide' | 'no_ball' | 'bye' | 'leg_bye';
+    isWicket: boolean;
+    dismissalType?: string;
+    dismissedBatterId?: string;
+    fielderId?: string;
+    incomingBatterId?: string;
+    isBoundary: boolean;
+    isSix: boolean;
+    timestamp: Date;
+  }>;
+
+  @Prop({
+    type: [{
+      innings: { type: Number, required: true },
+      team: { type: String, enum: ['home', 'away'], required: true },
+      playerId: { type: String, required: true },
+      playerName: { type: String, required: true },
+      runs: { type: Number, default: 0 },
+      balls: { type: Number, default: 0 },
+      fours: { type: Number, default: 0 },
+      sixes: { type: Number, default: 0 },
+      strikeRate: { type: Number, default: 0 },
+      isOut: { type: Boolean, default: false },
+      dismissalType: { type: String },
+      dismissedBy: { type: String },
+      fielderId: { type: String },
+      fowScore: { type: Number },
+      fowBalls: { type: Number },
+    }],
+  })
+  battingStats?: Array<{
+    innings: number;
+    team: 'home' | 'away';
+    playerId: string;
+    playerName: string;
+    runs: number;
+    balls: number;
+    fours: number;
+    sixes: number;
+    strikeRate: number;
+    isOut: boolean;
+    dismissalType?: string;
+    dismissedBy?: string;
+    fielderId?: string;
+    fowScore?: number;
+    fowBalls?: number;
+  }>;
+
+  @Prop({
+    type: [{
+      innings: { type: Number, required: true },
+      team: { type: String, enum: ['home', 'away'], required: true },
+      playerId: { type: String, required: true },
+      playerName: { type: String, required: true },
+      overs: { type: Number, default: 0 },
+      balls: { type: Number, default: 0 },
+      maidens: { type: Number, default: 0 },
+      runs: { type: Number, default: 0 },
+      wickets: { type: Number, default: 0 },
+      economy: { type: Number, default: 0 },
+      wides: { type: Number, default: 0 },
+      noBalls: { type: Number, default: 0 },
+    }],
+  })
+  bowlingStats?: Array<{
+    innings: number;
+    team: 'home' | 'away';
+    playerId: string;
+    playerName: string;
+    overs: number;
+    balls?: number;
+    maidens: number;
+    runs: number;
+    wickets: number;
+    economy: number;
+    wides: number;
+    noBalls: number;
+  }>;
+
+  @Prop({ default: false })
+  isLocked: boolean;
+
+  @Prop({
+    type: {
+      winner: { type: String, enum: ['home', 'away', 'tie', 'no_result'] },
+      margin: { type: String },
+      keyPerformers: [{
+        playerId: { type: String },
+        playerName: { type: String },
+        role: { type: String },
+        performance: { type: String },
+      }],
+      notes: { type: String },
+    },
+  })
+  matchResult?: {
+    winner?: 'home' | 'away' | 'tie' | 'no_result';
+    margin?: string;
+    keyPerformers?: Array<{ playerId: string; playerName: string; role: string; performance: string }>;
+    notes?: string;
+  };
 }
 
 export const LocalMatchSchema = SchemaFactory.createForClass(LocalMatch);

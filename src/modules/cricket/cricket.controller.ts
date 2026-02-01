@@ -5,6 +5,8 @@ import { GetMatchesDto } from './dto/get-matches.dto';
 import { LocalMatchService } from './services/local-match.service';
 import { CreateLocalMatchDto } from './dto/create-local-match.dto';
 import { UpdateLocalMatchScoreDto } from './dto/update-local-match-score.dto';
+import { RecordBallDto } from './dto/record-ball.dto';
+import { MatchSetupDto } from './dto/match-setup.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -228,6 +230,158 @@ export class CricketController {
       id,
       updateDto,
       user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Post('local/matches/:id/setup')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Complete match setup (playing XI, toss, opening batters, first bowler)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Match setup completed successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async completeMatchSetup(
+    @Param('id') id: string,
+    @Body() setupDto: MatchSetupDto,
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    setupDto.matchId = id;
+    const match = await this.localMatchService.completeMatchSetup(
+      id,
+      setupDto,
+      user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Post('local/matches/:id/ball')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Record a ball (ball-by-ball scoring)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Ball recorded successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async recordBall(
+    @Param('id') id: string,
+    @Body() ballDto: RecordBallDto,
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    ballDto.matchId = id;
+    const match = await this.localMatchService.recordBall(
+      id,
+      ballDto,
+      user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Post('local/matches/:id/undo')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Undo last ball' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Last ball undone successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async undoLastBall(
+    @Param('id') id: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.undoLastBall(
+      id,
+      user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Post('local/matches/:id/second-innings')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Start second innings' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Second innings started successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async startSecondInnings(
+    @Param('id') id: string,
+    @Body() body: { openingBatter1Id: string; openingBatter2Id: string; firstBowlerId: string },
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.startSecondInnings(
+      id,
+      body.openingBatter1Id,
+      body.openingBatter2Id,
+      body.firstBowlerId,
+      user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Post('local/matches/:id/complete')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Complete and lock match' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Match completed successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async completeMatch(
+    @Param('id') id: string,
+    @Body() body: {
+      winner?: 'home' | 'away' | 'tie' | 'no_result';
+      margin?: string;
+      keyPerformers?: Array<{ playerId: string; playerName: string; role: string; performance: string }>;
+      notes?: string;
+    },
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.completeMatch(
+      id,
+      user.scorerProfile.scorerId,
+      body,
     );
 
     return {
