@@ -32,38 +32,40 @@ export class MatchSetupDto {
   @IsString()
   matchId: string;
 
-  @ApiProperty({ type: [PlayerDto], description: 'Home team playing XI', minItems: 11, maxItems: 11 })
+  @ApiPropertyOptional({ type: [PlayerDto], description: 'Home team playing XI (optional, can be updated later)' })
   @IsArray()
-  @ArrayMinSize(11)
-  @ArrayMaxSize(11)
+  @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => PlayerDto)
-  homePlayingXI: PlayerDto[];
+  homePlayingXI?: PlayerDto[];
 
-  @ApiProperty({ type: [PlayerDto], description: 'Away team playing XI', minItems: 11, maxItems: 11 })
+  @ApiPropertyOptional({ type: [PlayerDto], description: 'Away team playing XI (optional, can be updated later)' })
   @IsArray()
-  @ArrayMinSize(11)
-  @ArrayMaxSize(11)
+  @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => PlayerDto)
-  awayPlayingXI: PlayerDto[];
+  awayPlayingXI?: PlayerDto[];
 
-  @ApiProperty({ type: TossDto, description: 'Toss result' })
+  @ApiPropertyOptional({ type: TossDto, description: 'Toss result (optional, can be updated later)' })
   @ValidateNested()
   @Type(() => TossDto)
-  toss: TossDto;
+  @IsOptional()
+  toss?: TossDto;
 
-  @ApiProperty({ description: 'Opening batter 1 ID (striker)' })
+  @ApiPropertyOptional({ description: 'Opening batter 1 ID (striker, optional, can be set later)' })
   @IsString()
-  openingBatter1Id: string;
+  @IsOptional()
+  openingBatter1Id?: string;
 
-  @ApiProperty({ description: 'Opening batter 2 ID (non-striker)' })
+  @ApiPropertyOptional({ description: 'Opening batter 2 ID (non-striker, optional, can be set later)' })
   @IsString()
-  openingBatter2Id: string;
+  @IsOptional()
+  openingBatter2Id?: string;
 
-  @ApiProperty({ description: 'First bowler ID' })
+  @ApiPropertyOptional({ description: 'First bowler ID (optional, can be set later)' })
   @IsString()
-  firstBowlerId: string;
+  @IsOptional()
+  firstBowlerId?: string;
 }
 
 

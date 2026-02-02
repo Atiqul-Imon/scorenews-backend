@@ -344,31 +344,37 @@ export class LocalMatchService {
       throw new ForbiddenException('You can only setup matches you created');
     }
 
-    if (match.status !== 'upcoming') {
-      throw new BadRequestException('Match setup can only be done for upcoming matches');
+    // Allow setup/updates for upcoming or live matches (scorer can update details anytime)
+    if (match.status === 'completed' || match.status === 'cancelled') {
+      throw new BadRequestException('Cannot update setup for completed or cancelled matches');
     }
 
-    // Store match setup
+    // Store match setup (merge with existing if any)
     match.matchSetup = {
       isSetupComplete: true,
-      tossWinner: setupDto.toss.winner,
-      tossDecision: setupDto.toss.decision,
-      homePlayingXI: setupDto.homePlayingXI,
-      awayPlayingXI: setupDto.awayPlayingXI,
+      tossWinner: setupDto.toss?.winner || match.matchSetup?.tossWinner,
+      tossDecision: setupDto.toss?.decision || match.matchSetup?.tossDecision,
+      homePlayingXI: setupDto.homePlayingXI || match.matchSetup?.homePlayingXI || [],
+      awayPlayingXI: setupDto.awayPlayingXI || match.matchSetup?.awayPlayingXI || [],
     };
 
-    // Determine batting team based on toss
-    const battingTeam = setupDto.toss.decision === 'bat' ? setupDto.toss.winner : setupDto.toss.winner === 'home' ? 'away' : 'home';
+    // Determine batting team - use toss if available, otherwise default to home
+    let battingTeam: 'home' | 'away' = 'home';
+    if (match.matchSetup.tossDecision && match.matchSetup.tossWinner) {
+      battingTeam = match.matchSetup.tossDecision === 'bat' 
+        ? match.matchSetup.tossWinner 
+        : match.matchSetup.tossWinner === 'home' ? 'away' : 'home';
+    }
 
-    // Initialize live state
+    // Initialize live state (use provided values or defaults)
     match.liveState = {
       currentInnings: 1,
       battingTeam,
-      strikerId: setupDto.openingBatter1Id,
-      nonStrikerId: setupDto.openingBatter2Id,
-      bowlerId: setupDto.firstBowlerId,
-      currentOver: 0,
-      currentBall: 0,
+      strikerId: setupDto.openingBatter1Id || match.liveState?.strikerId || '',
+      nonStrikerId: setupDto.openingBatter2Id || match.liveState?.nonStrikerId || '',
+      bowlerId: setupDto.firstBowlerId || match.liveState?.bowlerId || '',
+      currentOver: match.liveState?.currentOver || 0,
+      currentBall: match.liveState?.currentBall || 0,
       isInningsBreak: false,
     };
 
@@ -376,8 +382,11 @@ export class LocalMatchService {
     match.battingStats = [];
     match.bowlingStats = [];
 
-    // Change status to live
-    match.status = 'live';
+    // Allow match to go live even with minimal setup - scorer can update details later
+    // Only change to live if currently upcoming (don't change if already live)
+    if (match.status === 'upcoming') {
+      match.status = 'live';
+    }
     match.scorerInfo.lastUpdate = new Date();
 
     await match.save();
