@@ -223,6 +223,25 @@ export class LocalMatchService {
       match.matchNote = updateDto.matchNote;
     }
 
+    // Update live state if provided (for manual score entry with player changes)
+    if (updateDto.liveState && match.liveState) {
+      if (updateDto.liveState.strikerId !== undefined) {
+        match.liveState.strikerId = updateDto.liveState.strikerId;
+      }
+      if (updateDto.liveState.nonStrikerId !== undefined) {
+        match.liveState.nonStrikerId = updateDto.liveState.nonStrikerId;
+      }
+      if (updateDto.liveState.bowlerId !== undefined) {
+        match.liveState.bowlerId = updateDto.liveState.bowlerId;
+      }
+      if (updateDto.liveState.currentOver !== undefined) {
+        match.liveState.currentOver = updateDto.liveState.currentOver;
+      }
+      if (updateDto.liveState.currentBall !== undefined) {
+        match.liveState.currentBall = updateDto.liveState.currentBall;
+      }
+    }
+
     // Update scorer info
     match.scorerInfo.lastUpdate = new Date();
 
@@ -826,6 +845,56 @@ export class LocalMatchService {
     match.scorerInfo.lastUpdate = new Date();
     await match.save();
 
+    return match.toObject();
+  }
+
+  /**
+   * Update live state (current players, over, ball)
+   */
+  async updateLiveState(
+    matchId: string,
+    updateDto: { strikerId?: string; nonStrikerId?: string; bowlerId?: string; currentOver?: number; currentBall?: number },
+    scorerId: string,
+  ): Promise<LocalMatch> {
+    const match = await this.localMatchModel.findOne({ matchId });
+    if (!match) {
+      throw new NotFoundException(`Match with ID ${matchId} not found`);
+    }
+
+    if (match.scorerInfo.scorerId !== scorerId) {
+      throw new ForbiddenException('You can only update matches you created');
+    }
+
+    if (match.isLocked) {
+      throw new BadRequestException('Match is locked and cannot be edited');
+    }
+
+    if (!match.liveState) {
+      throw new BadRequestException('Match setup must be completed before updating live state');
+    }
+
+    // Update live state fields
+    if (updateDto.strikerId !== undefined) {
+      match.liveState.strikerId = updateDto.strikerId;
+    }
+    if (updateDto.nonStrikerId !== undefined) {
+      match.liveState.nonStrikerId = updateDto.nonStrikerId;
+    }
+    if (updateDto.bowlerId !== undefined) {
+      match.liveState.bowlerId = updateDto.bowlerId;
+    }
+    if (updateDto.currentOver !== undefined) {
+      match.liveState.currentOver = updateDto.currentOver;
+    }
+    if (updateDto.currentBall !== undefined) {
+      if (updateDto.currentBall < 0 || updateDto.currentBall > 5) {
+        throw new BadRequestException('Ball number must be between 0 and 5');
+      }
+      match.liveState.currentBall = updateDto.currentBall;
+    }
+
+    match.scorerInfo.lastUpdate = new Date();
+    await match.save();
     return match.toObject();
   }
 }

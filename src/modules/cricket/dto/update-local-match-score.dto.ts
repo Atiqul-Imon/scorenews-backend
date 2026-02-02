@@ -1,6 +1,7 @@
 import { IsNumber, IsObject, IsOptional, ValidateNested, Min, Max, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { UpdateLiveStateDto } from './update-live-state.dto';
 
 class TeamScoreDto {
   @ApiProperty({ description: 'Runs scored', minimum: 0 })
@@ -50,5 +51,11 @@ export class UpdateLocalMatchScoreDto {
   @Min(1)
   @IsOptional()
   innings?: number;
+
+  @ApiPropertyOptional({ type: UpdateLiveStateDto, description: 'Live state updates (current players, over, ball)' })
+  @ValidateNested()
+  @Type(() => UpdateLiveStateDto)
+  @IsOptional()
+  liveState?: UpdateLiveStateDto;
 }
 
