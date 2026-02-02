@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, ConflictException, BadRequestException, ForbiddenException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -136,6 +136,8 @@ export class ScorerService {
       scorerInfo: match.scorerInfo,
       isVerified: match.isVerified,
       matchNote: match.matchNote,
+      matchSetup: (match as any).matchSetup,
+      liveState: (match as any).liveState,
       createdAt: (match as any).createdAt?.toISOString(),
       updatedAt: (match as any).updatedAt?.toISOString(),
     }));
@@ -151,6 +153,54 @@ export class ScorerService {
           limit: result.limit,
         },
       },
+    };
+  }
+
+  async getScorerMatchById(userId: string, matchId: string) {
+    const user = await this.userModel.findById(userId).select('+scorerProfile');
+    
+    if (!user || !user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new BadRequestException('User is not a registered scorer');
+    }
+
+    // Get match with includeUnverified = true (scorer can see their own matches)
+    const match = await this.localMatchService.getMatchById(matchId, true);
+    
+    // Verify the scorer owns this match
+    if (match.scorerInfo.scorerId !== user.scorerProfile.scorerId) {
+      throw new ForbiddenException('You can only access matches you created');
+    }
+
+    // Transform LocalMatch to match frontend expectations
+    const transformedMatch = {
+      matchId: match.matchId,
+      series: match.series,
+      matchType: match.matchType,
+      isLocalMatch: match.isLocalMatch,
+      teams: match.teams,
+      venue: match.venue,
+      status: match.status,
+      format: match.format,
+      startTime: match.startTime.toISOString(),
+      endTime: match.endTime?.toISOString(),
+      currentScore: match.currentScore,
+      localLocation: match.localLocation,
+      localLeague: match.localLeague,
+      scorerInfo: match.scorerInfo,
+      isVerified: match.isVerified,
+      matchNote: match.matchNote,
+      matchSetup: (match as any).matchSetup,
+      liveState: (match as any).liveState,
+      battingStats: (match as any).battingStats,
+      bowlingStats: (match as any).bowlingStats,
+      isLocked: (match as any).isLocked,
+      createdAt: (match as any).createdAt?.toISOString(),
+      updatedAt: (match as any).updatedAt?.toISOString(),
+    };
+
+    return {
+      success: true,
+      data: transformedMatch,
     };
   }
 }
