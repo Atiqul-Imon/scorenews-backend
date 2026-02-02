@@ -1,5 +1,5 @@
-import { Controller, Post, Get, Body, Query, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { Controller, Post, Get, Body, Query, Param, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { ScorerService } from './scorer.service';
 import { ScorerRegistrationDto } from './dto/scorer-registration.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -58,6 +58,21 @@ export class ScorerController {
       startDate,
       endDate,
     });
+  }
+
+  @Get('matches/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get scorer match by ID (includes unverified matches)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Match retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Not authorized to access this match' })
+  async getMatchById(
+    @CurrentUser() user: UserDocument,
+    @Param('id') matchId: string,
+  ) {
+    return this.scorerService.getScorerMatchById(user._id.toString(), matchId);
   }
 }
 
