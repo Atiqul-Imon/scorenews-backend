@@ -532,6 +532,42 @@ export class AdminService {
     };
   }
 
+  async updateLocalMatchStatus(matchId: string, status: 'live' | 'completed' | 'upcoming' | 'cancelled') {
+    const match = await this.localMatchModel.findOne({ matchId });
+    
+    if (!match) {
+      throw new NotFoundException(`Local match with ID ${matchId} not found`);
+    }
+
+    const oldStatus = match.status;
+    match.status = status;
+
+    // If marking as completed or cancelled, set endTime if not already set
+    if ((status === 'completed' || status === 'cancelled') && !match.endTime) {
+      match.endTime = new Date();
+    }
+
+    // If marking as live from another status, ensure it's verified
+    if (status === 'live' && !match.isVerified) {
+      match.isVerified = true;
+      match.scorerInfo.verificationStatus = 'verified';
+    }
+
+    await match.save();
+
+    this.logger.log(`Local match ${matchId} status updated from ${oldStatus} to ${status}`, 'AdminService');
+
+    return {
+      success: true,
+      message: `Match status updated from ${oldStatus} to ${status}`,
+      data: {
+        matchId: match.matchId,
+        status: match.status,
+        previousStatus: oldStatus,
+      },
+    };
+  }
+
   async updateLocalMatch(matchId: string, updateData: any) {
     const match = await this.localMatchModel.findOne({ matchId });
     

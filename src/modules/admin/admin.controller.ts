@@ -164,6 +164,17 @@ export class AdminController {
     return this.adminService.updateLocalMatchVerification(matchId, isVerified);
   }
 
+  @Put('local-matches/:id/status')
+  @ApiOperation({ summary: 'Update local match status (live, completed, upcoming, cancelled)' })
+  @ApiResponse({ status: 200, description: 'Match status updated successfully' })
+  @ApiResponse({ status: 404, description: 'Local match not found' })
+  async updateLocalMatchStatus(
+    @Param('id') matchId: string,
+    @Body('status') status: 'live' | 'completed' | 'upcoming' | 'cancelled',
+  ) {
+    return this.adminService.updateLocalMatchStatus(matchId, status);
+  }
+
   @Put('local-matches/:id')
   @ApiOperation({ summary: 'Update local match details' })
   @ApiResponse({ status: 200, description: 'Match updated successfully' })
