@@ -7,6 +7,7 @@ import { CreateLocalMatchDto } from './dto/create-local-match.dto';
 import { UpdateLocalMatchScoreDto } from './dto/update-local-match-score.dto';
 import { RecordBallDto } from './dto/record-ball.dto';
 import { MatchSetupDto } from './dto/match-setup.dto';
+import { UpdateLiveStateDto } from './dto/update-live-state.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -382,6 +383,35 @@ export class CricketController {
       id,
       user.scorerProfile.scorerId,
       body,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Put('local/matches/:id/live-state')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Update live state (current players, over, ball)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Live state updated successfully' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async updateLiveState(
+    @Param('id') id: string,
+    @Body() updateDto: { strikerId?: string; nonStrikerId?: string; bowlerId?: string; currentOver?: number; currentBall?: number },
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.updateLiveState(
+      id,
+      updateDto,
+      user.scorerProfile.scorerId,
     );
 
     return {
