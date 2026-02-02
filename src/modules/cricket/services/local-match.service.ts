@@ -416,27 +416,35 @@ export class LocalMatchService {
    * Record a ball (ball-by-ball scoring)
    */
   async recordBall(matchId: string, ballDto: RecordBallDto, scorerId: string): Promise<LocalMatch> {
-    const match = await this.localMatchModel.findOne({ matchId });
-    if (!match) {
-      throw new NotFoundException(`Match with ID ${matchId} not found`);
-    }
+    try {
+      this.logger.log(`Recording ball for match ${matchId} by scorer ${scorerId}`);
+      
+      const match = await this.localMatchModel.findOne({ matchId });
+      if (!match) {
+        this.logger.error(`Match not found: ${matchId}`);
+        throw new NotFoundException(`Match with ID ${matchId} not found`);
+      }
 
-    if (match.scorerInfo.scorerId !== scorerId) {
-      throw new ForbiddenException('You can only score matches you created');
-    }
+      if (match.scorerInfo.scorerId !== scorerId) {
+        this.logger.error(`Scorer mismatch: ${scorerId} vs ${match.scorerInfo.scorerId}`);
+        throw new ForbiddenException('You can only score matches you created');
+      }
 
-    if (match.isLocked) {
-      throw new BadRequestException('Match is locked and cannot be edited');
-    }
+      if (match.isLocked) {
+        this.logger.warn(`Attempted to score locked match: ${matchId}`);
+        throw new BadRequestException('Match is locked and cannot be edited');
+      }
 
-    if (!match.liveState) {
-      throw new BadRequestException('Match setup must be completed before scoring');
-    }
+      if (!match.liveState) {
+        this.logger.error(`Match setup not completed: ${matchId}`);
+        throw new BadRequestException('Match setup must be completed before scoring');
+      }
 
-    // Validate ball data
-    if (ballDto.ball < 0 || ballDto.ball > 5) {
-      throw new BadRequestException('Ball number must be between 0 and 5');
-    }
+      // Validate ball data
+      if (ballDto.ball < 0 || ballDto.ball > 5) {
+        this.logger.error(`Invalid ball number: ${ballDto.ball}`);
+        throw new BadRequestException('Ball number must be between 0 and 5');
+      }
 
     // Create ball record
     const ballRecord = {
@@ -698,8 +706,19 @@ export class LocalMatchService {
     // Update scorer info
     match.scorerInfo.lastUpdate = new Date();
 
-    await match.save();
-    return match.toObject();
+      await match.save();
+      this.logger.log(`Ball recorded successfully for match ${matchId}`);
+      return match.toObject();
+    } catch (error) {
+      this.logger.error(`Error recording ball for match ${matchId}:`, error);
+      if (error instanceof NotFoundException || 
+          error instanceof ForbiddenException || 
+          error instanceof BadRequestException) {
+        throw error; // Re-throw known errors
+      }
+      // Wrap unknown errors
+      throw new BadRequestException(`Failed to record ball: ${error.message}`);
+    }
   }
 
   /**
