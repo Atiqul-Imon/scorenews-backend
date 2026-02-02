@@ -578,6 +578,14 @@ export class LocalMatchService {
       match.battingStats = [];
     }
 
+    // Helper function to get player name from match setup
+    const getPlayerName = (playerId: string, team: 'home' | 'away'): string => {
+      if (!match.matchSetup) return 'Unknown Player';
+      const playingXI = team === 'home' ? match.matchSetup.homePlayingXI : match.matchSetup.awayPlayingXI;
+      const player = playingXI?.find((p: any) => p.id === playerId);
+      return player?.name || 'Unknown Player';
+    };
+
     // Update striker stats
     let strikerStats = match.battingStats.find(
       (s) => s.playerId === ballDto.strikerId && s.innings === ballDto.innings && s.team === battingTeam,
@@ -587,7 +595,7 @@ export class LocalMatchService {
         innings: ballDto.innings,
         team: battingTeam,
         playerId: ballDto.strikerId,
-        playerName: '', // TODO: Get from match setup
+        playerName: getPlayerName(ballDto.strikerId, battingTeam),
         runs: 0,
         balls: 0,
         fours: 0,
@@ -596,6 +604,11 @@ export class LocalMatchService {
         isOut: false,
       };
       match.battingStats.push(strikerStats);
+    } else {
+      // Update playerName if it's missing (for existing stats)
+      if (!strikerStats.playerName || strikerStats.playerName === '') {
+        strikerStats.playerName = getPlayerName(ballDto.strikerId, battingTeam);
+      }
     }
 
     // Update striker stats for legal deliveries (normal, bye, leg_bye)
@@ -638,7 +651,7 @@ export class LocalMatchService {
         innings: ballDto.innings,
         team: battingTeam,
         playerId: ballDto.nonStrikerId,
-        playerName: '',
+        playerName: getPlayerName(ballDto.nonStrikerId, battingTeam),
         runs: 0,
         balls: 0,
         fours: 0,
@@ -647,6 +660,11 @@ export class LocalMatchService {
         isOut: false,
       };
       match.battingStats.push(nonStrikerStats);
+    } else {
+      // Update playerName if it's missing (for existing stats)
+      if (!nonStrikerStats.playerName || nonStrikerStats.playerName === '') {
+        nonStrikerStats.playerName = getPlayerName(ballDto.nonStrikerId, battingTeam);
+      }
     }
 
     // Calculate partnership from updated stats
@@ -668,7 +686,7 @@ export class LocalMatchService {
         innings: ballDto.innings,
         team: bowlingTeam,
         playerId: ballDto.bowlerId,
-        playerName: '', // TODO: Get from match setup
+        playerName: getPlayerName(ballDto.bowlerId, bowlingTeam),
         overs: 0,
         balls: 0,
         maidens: 0,
@@ -679,6 +697,11 @@ export class LocalMatchService {
         noBalls: 0,
       };
       match.bowlingStats.push(bowlerStats);
+    } else {
+      // Update playerName if it's missing (for existing stats)
+      if (!bowlerStats.playerName || bowlerStats.playerName === '') {
+        bowlerStats.playerName = getPlayerName(ballDto.bowlerId, bowlingTeam);
+      }
     }
 
     bowlerStats.runs += runsToAdd;
