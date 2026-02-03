@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Param, Query, Body, UseGuards, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Query, Body, UseGuards, BadRequestException, ForbiddenException, Logger, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { CricketService } from './cricket.service';
 import { GetMatchesDto } from './dto/get-matches.dto';
@@ -418,5 +418,56 @@ export class CricketController {
       success: true,
       data: match,
     };
+  }
+
+  @Put('local/matches/:id/status')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Update match status (upcoming, live, completed, cancelled)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'Match status updated successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid status transition' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async updateMatchStatus(
+    @Param('id') id: string,
+    @Body() body: { status: 'upcoming' | 'live' | 'completed' | 'cancelled' },
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    const match = await this.localMatchService.updateMatchStatus(
+      id,
+      body.status,
+      user.scorerProfile.scorerId,
+    );
+
+    return {
+      success: true,
+      data: match,
+    };
+  }
+
+  @Delete('local/matches/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a match (cannot delete completed matches)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 204, description: 'Match deleted successfully' })
+  @ApiResponse({ status: 400, description: 'Cannot delete completed matches' })
+  @ApiResponse({ status: 404, description: 'Match not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not match owner' })
+  async deleteMatch(
+    @Param('id') id: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    if (!user.scorerProfile?.isScorer || !user.scorerProfile?.scorerId) {
+      throw new ForbiddenException('User is not a registered scorer');
+    }
+
+    await this.localMatchService.deleteMatch(id, user.scorerProfile.scorerId);
   }
 }
