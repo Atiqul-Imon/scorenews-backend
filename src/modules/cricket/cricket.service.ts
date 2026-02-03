@@ -5,6 +5,7 @@ import { LiveMatchService } from './services/live-match.service';
 import { CompletedMatchService } from './services/completed-match.service';
 import { MatchTransitionService } from './services/match-transition.service';
 import { SportsMonksService } from './services/sportsmonks.service';
+import { CommentaryService } from './services/commentary.service';
 import { GetMatchesDto } from './dto/get-matches.dto';
 import { determineMatchStatus } from './utils/status-determiner';
 
@@ -15,6 +16,7 @@ export class CricketService {
     private completedMatchService: CompletedMatchService,
     private matchTransitionService: MatchTransitionService,
     private sportsMonksService: SportsMonksService,
+    private commentaryService: CommentaryService,
     private logger: WinstonLoggerService,
     private configService: ConfigService,
   ) {}
@@ -202,20 +204,35 @@ export class CricketService {
   }
 
   /**
-   * Get commentary for a match
+   * Get commentary for a match (merged with in-house commentary)
    */
-  async getCommentary(id: string) {
+  async getCommentary(id: string, merge: boolean = true) {
     try {
-      const commentary = await this.sportsMonksService.getCommentary(id, 'cricket');
-      return {
-        success: true,
-        data: commentary,
-      };
+      if (merge) {
+        // Return merged commentary (SportsMonk + in-house)
+        const merged = await this.commentaryService.mergeCommentary(id);
+        return {
+          success: true,
+          data: merged,
+        };
+      } else {
+        // Return only SportsMonk commentary (backward compatibility)
+        const commentary = await this.sportsMonksService.getCommentary(id, 'cricket');
+        return {
+          success: true,
+          data: commentary,
+        };
+      }
     } catch (error: any) {
       this.logger.error(`Error getting commentary for match ${id}`, error.stack, 'CricketService');
       return {
         success: true,
-        data: [],
+        data: {
+          firstInnings: [],
+          secondInnings: [],
+          all: [],
+          sources: { sportsMonk: 0, inHouse: 0 },
+        },
       };
     }
   }

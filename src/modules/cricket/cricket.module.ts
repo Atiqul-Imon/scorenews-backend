@@ -7,6 +7,7 @@ import { LiveMatch, LiveMatchSchema } from './schemas/live-match.schema';
 import { CompletedMatch, CompletedMatchSchema } from './schemas/completed-match.schema';
 import { CricketTeam, CricketTeamSchema } from './schemas/cricket-team.schema';
 import { LocalMatch, LocalMatchSchema } from './schemas/local-match.schema';
+import { MatchCommentary, MatchCommentarySchema } from './schemas/match-commentary.schema';
 import { CricketApiService } from './services/cricket-api.service';
 import { SportsMonksService } from './services/sportsmonks.service';
 import { CricketDataService } from './services/cricketdata.service';
@@ -15,6 +16,7 @@ import { CompletedMatchService } from './services/completed-match.service';
 import { MatchTransitionService } from './services/match-transition.service';
 import { MatchSchedulerService } from './services/match-scheduler.service';
 import { LocalMatchService } from './services/local-match.service';
+import { CommentaryService } from './services/commentary.service';
 import { RedisModule } from '../../redis/redis.module';
 import { LoggerModule } from '../../common/logger/logger.module';
 
@@ -25,6 +27,7 @@ import { LoggerModule } from '../../common/logger/logger.module';
       { name: CompletedMatch.name, schema: CompletedMatchSchema },
       { name: CricketTeam.name, schema: CricketTeamSchema },
       { name: LocalMatch.name, schema: LocalMatchSchema },
+      { name: MatchCommentary.name, schema: MatchCommentarySchema },
     ]),
     HttpModule,
     RedisModule,
@@ -41,8 +44,9 @@ import { LoggerModule } from '../../common/logger/logger.module';
     MatchTransitionService,
     MatchSchedulerService,
     LocalMatchService,
+    CommentaryService,
   ],
-  exports: [CricketService, LiveMatchService, CompletedMatchService, MatchTransitionService, MatchSchedulerService, LocalMatchService],
+  exports: [CricketService, LiveMatchService, CompletedMatchService, MatchTransitionService, MatchSchedulerService, LocalMatchService, CommentaryService],
 })
 export class CricketModule {}
 

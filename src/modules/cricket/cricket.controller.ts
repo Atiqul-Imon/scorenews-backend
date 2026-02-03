@@ -8,6 +8,8 @@ import { UpdateLocalMatchScoreDto } from './dto/update-local-match-score.dto';
 import { RecordBallDto } from './dto/record-ball.dto';
 import { MatchSetupDto } from './dto/match-setup.dto';
 import { UpdateLiveStateDto } from './dto/update-live-state.dto';
+import { AddCommentaryDto } from './dto/add-commentary.dto';
+import { CommentaryService } from './services/commentary.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -21,6 +23,7 @@ export class CricketController {
   constructor(
     private readonly cricketService: CricketService,
     private readonly localMatchService: LocalMatchService,
+    private readonly commentaryService: CommentaryService,
   ) {}
 
   @Public()
@@ -70,11 +73,121 @@ export class CricketController {
 
   @Public()
   @Get('matches/:id/commentary')
-  @ApiOperation({ summary: 'Get cricket match commentary' })
+  @ApiOperation({ summary: 'Get cricket match commentary (merged with in-house commentary)' })
   @ApiParam({ name: 'id', description: 'Match ID' })
   @ApiResponse({ status: 200, description: 'Commentary retrieved successfully' })
-  async getCommentary(@Param('id') id: string) {
-    return this.cricketService.getCommentary(id);
+  async getCommentary(@Param('id') id: string, @Query('merge') merge?: string) {
+    const shouldMerge = merge !== 'false'; // Default to true
+    return this.cricketService.getCommentary(id, shouldMerge);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Get('matches/:id/commentary/in-house')
+  @ApiOperation({ summary: 'Get in-house commentary only (admin/commentator only)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 200, description: 'In-house commentary retrieved successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not admin or commentator' })
+  async getInHouseCommentary(
+    @Param('id') id: string,
+    @CurrentUser() user: UserDocument,
+    @Query('innings') innings?: number,
+  ) {
+    // Check if user is admin or commentator
+    if (user.role !== 'admin' && user.role !== 'commentator') {
+      throw new ForbiddenException('Only admins and commentators can access in-house commentary');
+    }
+
+    const commentary = await this.commentaryService.getInHouseCommentary(id, innings);
+    return {
+      success: true,
+      data: commentary,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Post('matches/:id/commentary')
+  @ApiOperation({ summary: 'Add in-house commentary (admin/commentator only)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiResponse({ status: 201, description: 'Commentary added successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not admin or commentator' })
+  async addCommentary(
+    @Param('id') id: string,
+    @Body() addDto: AddCommentaryDto,
+    @CurrentUser() user: UserDocument,
+  ) {
+    // Check if user is admin or commentator
+    if (user.role !== 'admin' && user.role !== 'commentator') {
+      throw new ForbiddenException('Only admins and commentators can add commentary');
+    }
+
+    const commentary = await this.commentaryService.addCommentary(
+      id,
+      addDto,
+      user._id.toString(),
+      user.name,
+    );
+
+    return {
+      success: true,
+      data: commentary,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Put('matches/:id/commentary/:commentaryId')
+  @ApiOperation({ summary: 'Update in-house commentary (admin/commentator only)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiParam({ name: 'commentaryId', description: 'Commentary ID' })
+  @ApiResponse({ status: 200, description: 'Commentary updated successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not admin or commentator' })
+  async updateCommentary(
+    @Param('commentaryId') commentaryId: string,
+    @Body() body: { commentary: string },
+    @CurrentUser() user: UserDocument,
+  ) {
+    // Check if user is admin or commentator
+    if (user.role !== 'admin' && user.role !== 'commentator') {
+      throw new ForbiddenException('Only admins and commentators can update commentary');
+    }
+
+    const commentary = await this.commentaryService.updateCommentary(
+      commentaryId,
+      body.commentary,
+      user._id.toString(),
+    );
+
+    return {
+      success: true,
+      data: commentary,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Delete('matches/:id/commentary/:commentaryId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete in-house commentary (admin/commentator only)' })
+  @ApiParam({ name: 'id', description: 'Match ID' })
+  @ApiParam({ name: 'commentaryId', description: 'Commentary ID' })
+  @ApiResponse({ status: 204, description: 'Commentary deleted successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - not admin or commentator' })
+  async deleteCommentary(
+    @Param('commentaryId') commentaryId: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    // Check if user is admin or commentator
+    if (user.role !== 'admin' && user.role !== 'commentator') {
+      throw new ForbiddenException('Only admins and commentators can delete commentary');
+    }
+
+    await this.commentaryService.deleteCommentary(
+      commentaryId,
+      user._id.toString(),
+      user.role === 'admin',
+    );
   }
 
   @Public()

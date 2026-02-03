@@ -18,7 +18,7 @@ export class User {
   @Prop({ trim: true })
   avatar?: string;
 
-  @Prop({ enum: ['user', 'admin', 'moderator', 'scorer'], default: 'user', index: true })
+  @Prop({ enum: ['user', 'admin', 'moderator', 'scorer', 'commentator'], default: 'user', index: true })
   role: string;
 
   @Prop({ default: false, index: true })
@@ -126,6 +126,7 @@ export class User {
   comparePassword?: (candidatePassword: string) => Promise<boolean>;
   isAdmin?: () => boolean;
   isModerator?: () => boolean;
+  isCommentator?: () => boolean;
   updateLastLogin?: () => Promise<UserDocument>;
 }
 
@@ -163,6 +164,11 @@ UserSchema.methods.isAdmin = function (): boolean {
 // Method to check if user is moderator
 UserSchema.methods.isModerator = function (): boolean {
   return this.role === 'moderator' || this.role === 'admin';
+};
+
+// Method to check if user is commentator
+UserSchema.methods.isCommentator = function (): boolean {
+  return this.role === 'commentator' || this.role === 'admin';
 };
 
 // Method to update last login
