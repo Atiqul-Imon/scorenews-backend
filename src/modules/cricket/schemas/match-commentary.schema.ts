@@ -14,7 +14,7 @@ export class MatchCommentary {
   @Prop({ required: true, min: 0, index: true })
   over: number;
 
-  @Prop({ required: false, min: 0, max: 5 })
+  @Prop({ type: Number, required: false, min: 0, max: 5, default: null })
   ball: number | null; // null for pre/post commentary
 
   @Prop({
