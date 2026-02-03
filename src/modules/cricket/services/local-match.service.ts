@@ -512,18 +512,29 @@ export class LocalMatchService {
     let newStrikerId = ballDto.strikerId;
     let newNonStrikerId = ballDto.nonStrikerId;
 
-    // If wicket, incoming batter becomes striker
+    // Handle wicket: incoming batter position depends on runs
     if (ballDto.delivery.isWicket && ballDto.delivery.incomingBatterId) {
-      newStrikerId = ballDto.delivery.incomingBatterId;
-    } else if (ballDto.delivery.ballType !== 'wide' && ballDto.delivery.ballType !== 'no_ball') {
-      // Normal delivery (normal, bye, leg_bye) - check for strike rotation
-      // Bye and leg_bye: strike rotates on odd runs even though runs don't count to batter
+      // In cricket, when a wicket falls:
+      // - If odd runs: incoming batter comes in at non-striker's end (current non-striker becomes striker)
+      // - If even runs: incoming batter comes in at striker's end (becomes striker)
+      if (ballDto.delivery.runs % 2 === 1) {
+        // Odd runs: incoming batter at non-striker's end
+        newStrikerId = ballDto.nonStrikerId;
+        newNonStrikerId = ballDto.delivery.incomingBatterId;
+      } else {
+        // Even runs: incoming batter at striker's end
+        newStrikerId = ballDto.delivery.incomingBatterId;
+        // Non-striker stays the same
+      }
+    } else {
+      // Strike rotation based on total runs (for all delivery types)
+      // Wide and no-ball: Strike rotates if total runs are odd (e.g., wide 4 = 5 runs = odd = rotate)
+      // Normal, bye, leg_bye: Strike rotates if runs are odd
       if (ballDto.delivery.runs % 2 === 1) {
         // Odd runs - swap strike
         [newStrikerId, newNonStrikerId] = [newNonStrikerId, newStrikerId];
       }
     }
-    // Wide and no-ball: No strike rotation
 
     // Increment ball (if not wide/no-ball)
     if (ballDto.delivery.ballType !== 'wide' && ballDto.delivery.ballType !== 'no_ball') {
@@ -614,24 +625,24 @@ export class LocalMatchService {
     // Update striker stats for legal deliveries (normal, bye, leg_bye)
     // Wides and no-balls don't count as balls faced by batter
     if (ballDto.delivery.ballType === 'normal' || ballDto.delivery.ballType === 'bye' || ballDto.delivery.ballType === 'leg_bye') {
-      // For bye and leg_bye, runs don't count to batter
+      // For bye and leg_bye, runs don't count to batter (only team gets runs)
+      // For normal deliveries, batter gets the runs
       if (ballDto.delivery.ballType === 'normal') {
         strikerStats.runs += ballDto.delivery.runs;
-      }
-      strikerStats.balls += 1;
-      
-      // Auto-detect boundaries
-      if (ballDto.delivery.isSix || ballDto.delivery.runs === 6) {
-        strikerStats.sixes += 1;
-        if (ballDto.delivery.ballType === 'normal') {
-          strikerStats.runs += 6; // Already added above, but ensure it's counted
+        
+        // Auto-detect boundaries (only for normal deliveries)
+        if (ballDto.delivery.isSix || ballDto.delivery.runs === 6) {
+          strikerStats.sixes += 1;
+        } else if (ballDto.delivery.isBoundary || ballDto.delivery.runs === 4) {
+          strikerStats.fours += 1;
         }
-      } else if (ballDto.delivery.isBoundary || ballDto.delivery.runs === 4) {
-        strikerStats.fours += 1;
       }
+      // Bye and leg_bye: runs don't count to batter, but ball counts
+      strikerStats.balls += 1;
       
       strikerStats.strikeRate = strikerStats.balls > 0 ? (strikerStats.runs / strikerStats.balls) * 100 : 0;
     }
+    // Wides and no-balls: No ball faced, no runs to batter (only team gets runs)
 
     if (ballDto.delivery.isWicket && ballDto.delivery.dismissedBatterId === ballDto.strikerId) {
       strikerStats.isOut = true;
@@ -704,13 +715,18 @@ export class LocalMatchService {
       }
     }
 
+    // Update bowler stats
+    // All runs (including extras) count towards bowler's economy
     bowlerStats.runs += runsToAdd;
+    
     if (ballDto.delivery.ballType === 'wide') {
       bowlerStats.wides += 1;
+      // Wide doesn't count as a ball bowled
     } else if (ballDto.delivery.ballType === 'no_ball') {
       bowlerStats.noBalls += 1;
+      // No-ball doesn't count as a ball bowled
     } else {
-      // Normal delivery - increment balls, then calculate overs
+      // Normal delivery (normal, bye, leg_bye) - increment balls, then calculate overs
       bowlerStats.balls = (bowlerStats.balls || 0) + 1;
       if (bowlerStats.balls >= 6) {
         bowlerStats.overs += 1;
