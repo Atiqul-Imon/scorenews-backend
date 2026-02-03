@@ -539,12 +539,38 @@ export class AdminService {
       throw new NotFoundException(`Local match with ID ${matchId} not found`);
     }
 
-    const oldStatus = match.status;
+    // Store old status before validation
+    const oldStatus = match.status as 'live' | 'completed' | 'upcoming' | 'cancelled';
+
+    // Prevent changing status of completed matches
+    if (oldStatus === 'completed') {
+      throw new BadRequestException('Cannot change status of completed matches');
+    }
+
+    // Validate status transitions (same as scorer endpoint)
+    const validTransitions: Record<string, string[]> = {
+      'upcoming': ['live', 'cancelled'],
+      'live': ['upcoming', 'completed', 'cancelled'],
+      'cancelled': ['upcoming'],
+      'completed': [], // No transitions from completed
+    };
+
+    const allowedStatuses = validTransitions[oldStatus] || [];
+    if (!allowedStatuses.includes(status)) {
+      throw new BadRequestException(
+        `Cannot change status from ${oldStatus} to ${status}. Allowed transitions: ${allowedStatuses.join(', ')}`
+      );
+    }
     match.status = status;
 
-    // If marking as completed or cancelled, set endTime if not already set
-    if ((status === 'completed' || status === 'cancelled') && !match.endTime) {
-      match.endTime = new Date();
+    // If marking as completed or cancelled, set endTime and lock match
+    if (status === 'completed' || status === 'cancelled') {
+      if (!match.endTime) {
+        match.endTime = new Date();
+      }
+      if (status === 'completed') {
+        match.isLocked = true;
+      }
     }
 
     // If marking as live from another status, ensure it's verified
@@ -601,9 +627,13 @@ export class AdminService {
       throw new NotFoundException(`Local match with ID ${matchId} not found`);
     }
 
+    // Prevent deletion of completed matches (admin can still delete, but with warning)
+    // Actually, let's allow admin to delete completed matches but with a note
+    // The frontend should show a warning though
+    
     await this.localMatchModel.deleteOne({ matchId });
 
-    this.logger.log(`Local match ${matchId} deleted`, 'AdminService');
+    this.logger.log(`Local match ${matchId} deleted by admin`, 'AdminService');
 
     return {
       success: true,

@@ -73,7 +73,7 @@ export class LocalMatchService {
       series: createDto.series,
       format: createDto.format,
       startTime,
-      status: startTime > new Date() ? 'upcoming' : 'live',
+      status: 'upcoming', // Always start as upcoming - scorer will set to live when ready
       teams: {
         home: {
           id: homeTeamId,
@@ -184,6 +184,11 @@ export class LocalMatchService {
       throw new ForbiddenException('You can only update matches you created');
     }
 
+    // Prevent updating score on completed matches
+    if (match.status === 'completed' || match.isLocked) {
+      throw new BadRequestException('Cannot update score for completed or locked matches');
+    }
+
     // Validate score data
     if (updateDto.home.wickets > 10 || updateDto.away.wickets > 10) {
       throw new BadRequestException('Wickets cannot exceed 10');
@@ -213,10 +218,7 @@ export class LocalMatchService {
       },
     };
 
-    // Update status to live if it was upcoming
-    if (match.status === 'upcoming') {
-      match.status = 'live';
-    }
+    // Don't auto-change status - scorer controls when match goes live
 
     // Update match note if provided
     if (updateDto.matchNote) {
@@ -401,11 +403,7 @@ export class LocalMatchService {
     match.battingStats = [];
     match.bowlingStats = [];
 
-    // Allow match to go live even with minimal setup - scorer can update details later
-    // Only change to live if currently upcoming (don't change if already live)
-    if (match.status === 'upcoming') {
-      match.status = 'live';
-    }
+    // Don't auto-change status - scorer controls when match goes live
     match.scorerInfo.lastUpdate = new Date();
 
     await match.save();
@@ -954,6 +952,82 @@ export class LocalMatchService {
     match.scorerInfo.lastUpdate = new Date();
     await match.save();
     return match.toObject();
+  }
+
+  /**
+   * Update match status (upcoming, live, completed)
+   */
+  async updateMatchStatus(
+    matchId: string,
+    status: 'upcoming' | 'live' | 'completed' | 'cancelled',
+    scorerId: string,
+  ): Promise<LocalMatch> {
+    const match = await this.localMatchModel.findOne({ matchId });
+    if (!match) {
+      throw new NotFoundException(`Match with ID ${matchId} not found`);
+    }
+
+    // Check if scorer owns this match
+    if (match.scorerInfo.scorerId !== scorerId) {
+      throw new ForbiddenException('You can only update matches you created');
+    }
+
+    // Store old status before validation
+    const oldStatus = match.status as 'live' | 'completed' | 'upcoming' | 'cancelled';
+
+    // Prevent changing status of completed matches
+    if (oldStatus === 'completed') {
+      throw new BadRequestException('Cannot change status of completed matches');
+    }
+
+    // Validate status transitions
+    const validTransitions: Record<string, string[]> = {
+      'upcoming': ['live', 'cancelled'],
+      'live': ['upcoming', 'completed', 'cancelled'],
+      'cancelled': ['upcoming'],
+      'completed': [], // No transitions from completed
+    };
+
+    const allowedStatuses = validTransitions[oldStatus] || [];
+    if (!allowedStatuses.includes(status)) {
+      throw new BadRequestException(
+        `Cannot change status from ${oldStatus} to ${status}. Allowed transitions: ${allowedStatuses.join(', ')}`
+      );
+    }
+
+    // Set endTime when marking as completed
+    if (status === 'completed') {
+      match.endTime = new Date();
+      match.isLocked = true;
+    }
+
+    match.status = status;
+    match.scorerInfo.lastUpdate = new Date();
+    await match.save();
+
+    return match.toObject();
+  }
+
+  /**
+   * Delete a match
+   */
+  async deleteMatch(matchId: string, scorerId: string): Promise<void> {
+    const match = await this.localMatchModel.findOne({ matchId });
+    if (!match) {
+      throw new NotFoundException(`Match with ID ${matchId} not found`);
+    }
+
+    // Check if scorer owns this match
+    if (match.scorerInfo.scorerId !== scorerId) {
+      throw new ForbiddenException('You can only delete matches you created');
+    }
+
+    // Prevent deletion of completed matches
+    if (match.status === 'completed') {
+      throw new BadRequestException('Cannot delete completed matches');
+    }
+
+    await this.localMatchModel.deleteOne({ matchId });
   }
 }
 
