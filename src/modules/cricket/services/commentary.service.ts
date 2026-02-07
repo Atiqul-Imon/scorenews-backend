@@ -69,6 +69,11 @@ export class CommentaryService {
       .sort({ innings: 1, over: 1, ball: 1, commentaryType: 1, order: 1, createdAt: 1 })
       .lean();
 
+    this.logger.log(`Retrieved ${commentary.length} in-house commentary entries for match ${matchId}${innings ? `, innings ${innings}` : ''}`, 'CommentaryService');
+    if (commentary.length > 0) {
+      this.logger.debug(`Sample in-house commentary: over=${commentary[0].over}, ball=${commentary[0].ball}, type=${commentary[0].commentaryType}`, 'CommentaryService');
+    }
+
     return commentary;
   }
 
@@ -135,16 +140,21 @@ export class CommentaryService {
 
     // Fetch in-house commentary
     const inHouseCommentary = await this.getInHouseCommentary(matchId);
+    this.logger.log(`Merging commentary for match ${matchId}: SportsMonk=${sportsMonkCommentary.all.length}, In-House=${inHouseCommentary.length}`, 'CommentaryService');
 
     // Merge commentary for each innings
+    const firstInningsInHouse = inHouseCommentary.filter((c) => c.innings === 1);
+    const secondInningsInHouse = inHouseCommentary.filter((c) => c.innings === 2);
+    this.logger.log(`In-house commentary breakdown: First innings=${firstInningsInHouse.length}, Second innings=${secondInningsInHouse.length}`, 'CommentaryService');
+
     const mergedFirstInnings = this.mergeInningsCommentary(
       sportsMonkCommentary.firstInnings,
-      inHouseCommentary.filter((c) => c.innings === 1),
+      firstInningsInHouse,
     );
 
     const mergedSecondInnings = this.mergeInningsCommentary(
       sportsMonkCommentary.secondInnings,
-      inHouseCommentary.filter((c) => c.innings === 2),
+      secondInningsInHouse,
     );
 
     // Combine all commentary
@@ -194,22 +204,30 @@ export class CommentaryService {
 
     // Add in-house entries
     inHouseEntries.forEach((entry) => {
-      const key = entry.ball !== null ? `${entry.over}-${entry.ball}` : `${entry.over}-pre`;
+      // Create a unique key that groups pre-ball, ball, and post-ball together
+      // For pre-ball and post-ball, use the ball number if available
+      // For ball commentary, use the ball number
+      const ballNum = entry.ball !== null && entry.ball !== undefined ? entry.ball : 0;
+      const key = `${entry.over}-${ballNum}`;
+      
       if (!grouped[key]) {
         grouped[key] = [];
       }
       grouped[key].push({
         id: entry._id.toString(),
+        _id: entry._id.toString(),
         over: entry.over,
         ball: entry.ball,
-        ballNumber: entry.ball !== null ? entry.over * 6 + entry.ball + 1 : null,
+        ballNumber: entry.ball !== null && entry.ball !== undefined ? entry.ball : null,
         runs: 0, // In-house commentary doesn't have runs
         commentary: entry.commentary,
         commentaryType: entry.commentaryType,
         source: 'in-house',
         authorName: entry.authorName,
         timestamp: entry.createdAt?.toISOString() || new Date().toISOString(),
-        order: entry.order,
+        createdAt: entry.createdAt?.toISOString() || new Date().toISOString(),
+        order: entry.order || 0,
+        innings: entry.innings,
       });
     });
 
@@ -221,16 +239,12 @@ export class CommentaryService {
         const partsB = b.split('-');
         const overA = Number(partsA[0]);
         const overB = Number(partsB[0]);
-        const ballA = partsA[1];
-        const ballB = partsB[1];
+        const ballA = Number(partsA[1]);
+        const ballB = Number(partsB[1]);
         
         if (overA !== overB) return overB - overA; // Higher over first
-        if (ballA === 'pre') return 1; // Pre-ball goes after
-        if (ballB === 'pre') return -1;
-        const ballANum = Number(ballA);
-        const ballBNum = Number(ballB);
-        if (isNaN(ballANum) || isNaN(ballBNum)) return 0;
-        return ballBNum - ballANum; // Higher ball first
+        if (isNaN(ballA) || isNaN(ballB)) return 0;
+        return ballB - ballA; // Higher ball first
       })
       .forEach((key) => {
         const entries = grouped[key];
