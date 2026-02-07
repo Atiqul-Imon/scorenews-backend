@@ -308,21 +308,23 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
     // Scoreboards can have multiple entries per team (innings), get the latest one
     // IMPORTANT: Filter by type='total' to get actual scores, not 'extra' type which has total:0
     
-    // Get all scores for each team, prefer 'total' type over 'extra' type
+    // Get all scores for each team, ONLY use 'total' type (never 'extra' type)
+    // The 'extra' type only contains extras (wides, no-balls, byes, leg-byes) and has total:0
     const homeScores = scores.filter((s: any) => 
       s.team_id === localteamId && 
       s.team_id !== undefined &&
-      s.type === 'total' // Only use 'total' type scoreboards, not 'extra'
+      s.type === 'total' && // CRITICAL: Only use 'total' type, ignore 'extra' type
+      (s.total > 0 || s.overs > 0 || s.wickets > 0) // Must have actual match data
     );
     const awayScores = scores.filter((s: any) => 
       s.team_id === visitorteamId && 
       s.team_id !== undefined &&
-      s.type === 'total' // Only use 'total' type scoreboards, not 'extra'
+      s.type === 'total' && // CRITICAL: Only use 'total' type, ignore 'extra' type
+      (s.total > 0 || s.overs > 0 || s.wickets > 0) // Must have actual match data
     );
     
-    // If no 'total' type found, fall back to any scoreboard (for backward compatibility)
-    const homeScoresFallback = scores.filter((s: any) => s.team_id === localteamId && s.team_id !== undefined);
-    const awayScoresFallback = scores.filter((s: any) => s.team_id === visitorteamId && s.team_id !== undefined);
+    // NO FALLBACK to 'extra' type - if no 'total' type exists, team hasn't batted yet
+    // This ensures we never use the 'extra' type scoreboard which has total:0
     
     // Get the latest score (highest overs or most recent) for each team
     if (homeScores.length > 0) {
@@ -331,26 +333,18 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         const currentOvers = parseFloat(current.overs?.toString() || '0');
         return currentOvers > latestOvers ? current : latest;
       }, homeScores[0]);
-    } else if (homeScoresFallback.length > 0) {
-      // Fallback: use any scoreboard if no 'total' type found
-      homeScore = homeScoresFallback.reduce((latest: any, current: any) => {
-        const latestOvers = parseFloat(latest.overs?.toString() || '0');
-        const currentOvers = parseFloat(current.overs?.toString() || '0');
-        return currentOvers > latestOvers ? current : latest;
-      }, homeScoresFallback[0]);
     } else {
-      // Fallback: Try to find by scoreboard S1, but verify team_id matches
-      const s1Score = scores.find((s: any) => s.scoreboard === 'S1');
-      if (s1Score && s1Score.team_id === localteamId) {
-        homeScore = s1Score;
-      } else if (s1Score && s1Score.team_id !== visitorteamId) {
-        // If S1 exists and doesn't belong to away team, use it for home
-        homeScore = s1Score;
-      } else {
-        // Find first score that doesn't belong to away team
-        const nonAwayScore = scores.find((s: any) => s.team_id !== visitorteamId && s.team_id !== undefined);
-        homeScore = nonAwayScore || scores[0] || {};
-      }
+      // No 'total' type scoreboard for home team - they haven't batted yet
+      homeScore = {
+        team_id: localteamId,
+        total: 0,
+        score: 0,
+        wickets: 0,
+        overs: 0,
+        balls: 0,
+        type: 'total',
+        scoreboard: 'S1'
+      };
     }
     
     if (awayScores.length > 0) {
@@ -359,26 +353,18 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
         const currentOvers = parseFloat(current.overs?.toString() || '0');
         return currentOvers > latestOvers ? current : latest;
       }, awayScores[0]);
-    } else if (awayScoresFallback.length > 0) {
-      // Fallback: use any scoreboard if no 'total' type found
-      awayScore = awayScoresFallback.reduce((latest: any, current: any) => {
-        const latestOvers = parseFloat(latest.overs?.toString() || '0');
-        const currentOvers = parseFloat(current.overs?.toString() || '0');
-        return currentOvers > latestOvers ? current : latest;
-      }, awayScoresFallback[0]);
     } else {
-      // Fallback: Try to find by scoreboard S2, but verify team_id matches
-      const s2Score = scores.find((s: any) => s.scoreboard === 'S2');
-      if (s2Score && s2Score.team_id === visitorteamId) {
-        awayScore = s2Score;
-      } else if (s2Score && s2Score.team_id !== localteamId) {
-        // If S2 exists and doesn't belong to home team, use it for away
-        awayScore = s2Score;
-      } else {
-        // Find first score that doesn't belong to home team
-        const nonHomeScore = scores.find((s: any) => s.team_id !== localteamId && s.team_id !== undefined);
-        awayScore = nonHomeScore || (scores.length > 1 ? scores[1] : {});
-      }
+      // No 'total' type scoreboard for away team - they haven't batted yet
+      awayScore = {
+        team_id: visitorteamId,
+        total: 0,
+        score: 0,
+        wickets: 0,
+        overs: 0,
+        balls: 0,
+        type: 'total',
+        scoreboard: 'S2'
+      };
     }
     
     // CRITICAL: Ensure homeScore and awayScore are from different teams
@@ -1186,18 +1172,91 @@ export function transformSportsMonksMatchToFrontend(apiMatch: any, sport: 'crick
       }
       
       // Determine which team is currently batting based on API status
-      // For "1st Innings": usually the team that won the toss (or localteam)
-      // For "2nd Innings": the other team
+      // CRITICAL: SportsMonk API status field may be outdated (e.g., says "1st Innings" when match is in 2nd innings)
+      // So we need to infer the actual current innings from scoreboard data
+      
+      // Check if first innings is complete by looking at scoreboards
+      const matchType = (apiMatch.type || '').toLowerCase();
+      const isT20 = matchType.includes('t20');
+      const isODI = matchType.includes('odi');
+      const maxOvers = isT20 ? 20 : isODI ? 50 : undefined;
+      
+      // Find all scoreboards for both teams
+      const allScoreboards = apiMatch.scoreboards || [];
+      const firstInningsTeamId = apiMatch.toss_won_team_id || apiMatch.localteam_id;
+      const secondInningsTeamId = firstInningsTeamId === apiMatch.localteam_id 
+        ? apiMatch.visitorteam_id 
+        : apiMatch.localteam_id;
+      
+      // Check if first innings is complete
+      const firstInningsScoreboards = allScoreboards.filter((sb: any) => 
+        sb.type === 'total' && 
+        sb.team_id === firstInningsTeamId &&
+        (sb.total > 0 || sb.overs > 0)
+      );
+      
+      let firstInningsComplete = false;
+      if (firstInningsScoreboards.length > 0) {
+        const firstInningsScore = firstInningsScoreboards.reduce((latest: any, current: any) => {
+          const latestOvers = parseFloat(latest.overs?.toString() || '0');
+          const currentOvers = parseFloat(current.overs?.toString() || '0');
+          return currentOvers > latestOvers ? current : latest;
+        }, firstInningsScoreboards[0]);
+        
+        const firstInningsOvers = parseFloat(firstInningsScore.overs?.toString() || '0');
+        const firstInningsWickets = firstInningsScore.wickets || 0;
+        const firstInningsAllOut = firstInningsWickets >= 10;
+        const firstInningsReachedMaxOvers = maxOvers !== undefined && firstInningsOvers >= maxOvers;
+        firstInningsComplete = firstInningsAllOut || firstInningsReachedMaxOvers;
+      }
+      
+      // Check if second innings has started (has scoreboards)
+      const secondInningsScoreboards = allScoreboards.filter((sb: any) => 
+        sb.type === 'total' && 
+        sb.team_id === secondInningsTeamId &&
+        (sb.total > 0 || sb.overs > 0)
+      );
+      const secondInningsStarted = secondInningsScoreboards.length > 0;
+      
+      // Infer actual current innings from data, not just status field
+      let actualCurrentInnings: '1st' | '2nd' | null = null;
+      if (firstInningsComplete && secondInningsStarted) {
+        actualCurrentInnings = '2nd';
+      } else if (!firstInningsComplete) {
+        actualCurrentInnings = '1st';
+      } else if (firstInningsComplete && !secondInningsStarted) {
+        // First innings complete but second hasn't started - might be innings break
+        actualCurrentInnings = null;
+      }
+      
+      // Use inferred innings if status field seems outdated
+      const statusSaysFirstInnings = isFirstInnings;
+      const statusSaysSecondInnings = isSecondInnings;
+      const statusIsOutdated = (statusSaysFirstInnings && actualCurrentInnings === '2nd') || 
+                                (statusSaysSecondInnings && actualCurrentInnings === '1st');
+      
+      if (statusIsOutdated && actualCurrentInnings) {
+        console.log(`[Transformer] WARNING: API status="${matchStatus}" is outdated. Inferred current innings: ${actualCurrentInnings} based on scoreboard data.`);
+      }
+      
+      // Determine which team is currently batting
       let currentBattingTeamId: number | null = null;
-      if (isFirstInnings) {
+      if (actualCurrentInnings === '1st' || (statusSaysFirstInnings && !statusIsOutdated)) {
         // First innings: usually the team that won toss or localteam
-        currentBattingTeamId = apiMatch.toss_won_team_id || apiMatch.localteam_id || null;
-      } else if (isSecondInnings) {
-        // Second innings: the other team (not the one that batted first)
-        const firstInningsTeamId = apiMatch.toss_won_team_id || apiMatch.localteam_id;
-        currentBattingTeamId = firstInningsTeamId === apiMatch.localteam_id 
-          ? apiMatch.visitorteam_id 
-          : apiMatch.localteam_id;
+        currentBattingTeamId = firstInningsTeamId;
+      } else if (actualCurrentInnings === '2nd' || (statusSaysSecondInnings && !statusIsOutdated)) {
+        // Second innings: the other team
+        currentBattingTeamId = secondInningsTeamId;
+      } else if (statusSaysFirstInnings && statusIsOutdated && actualCurrentInnings === '2nd') {
+        // Status says 1st but data shows 2nd - use second innings team
+        currentBattingTeamId = secondInningsTeamId;
+      } else {
+        // Fallback to status field
+        if (isFirstInnings) {
+          currentBattingTeamId = firstInningsTeamId;
+        } else if (isSecondInnings) {
+          currentBattingTeamId = secondInningsTeamId;
+        }
       }
       
       // Find the current innings scoreboard for the team currently batting
