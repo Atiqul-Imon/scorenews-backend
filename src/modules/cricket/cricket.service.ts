@@ -127,19 +127,37 @@ export class CricketService {
 
   /**
    * Get match by ID - checks both live and completed matches
+   * For live matches, fetches fresh data from API to ensure latest scores
    */
   async getMatchById(id: string) {
     try {
-      // First check live matches
+      // First check database for quick response
       const liveMatch = await this.liveMatchService.getLiveMatchById(id);
       if (liveMatch) {
+        // For live matches, also trigger background refresh from API
+        // This ensures data stays fresh while returning cached data immediately
+        this.sportsMonksService.getMatchDetails(id, 'cricket')
+          .then(async (apiMatch) => {
+            if (apiMatch) {
+              const statusResult = determineMatchStatus(apiMatch);
+              if (statusResult.status === 'live') {
+                // Background refresh - update database with fresh data
+                await this.liveMatchService.fetchAndUpdateLiveMatches();
+              }
+            }
+          })
+          .catch((err) => {
+            // Silently fail background refresh - don't block response
+            this.logger.warn(`Background refresh failed for match ${id}: ${err.message}`, 'CricketService');
+          });
+        
         return {
           success: true,
           data: liveMatch,
         };
       }
       
-      // Then check completed matches
+      // Check completed matches
       const completedMatch = await this.completedMatchService.getCompletedMatchById(id);
       if (completedMatch) {
         return {
@@ -148,7 +166,7 @@ export class CricketService {
         };
       }
       
-      // If not found in either, fetch from API
+      // If not found in database, fetch from API
       try {
         const apiMatch = await this.sportsMonksService.getMatchDetails(id, 'cricket');
         if (apiMatch) {
@@ -156,9 +174,9 @@ export class CricketService {
           const statusResult = determineMatchStatus(apiMatch);
           
           if (statusResult.status === 'live') {
-            // Process single match instead of fetching all
-            const processed = await this.liveMatchService.fetchAndUpdateLiveMatches();
-            const match = processed.find(m => m.matchId === id) || await this.liveMatchService.getLiveMatchById(id);
+            // Fetch and update all live matches (includes this one)
+            await this.liveMatchService.fetchAndUpdateLiveMatches();
+            const match = await this.liveMatchService.getLiveMatchById(id);
             if (match) {
               return { success: true, data: match };
             }
