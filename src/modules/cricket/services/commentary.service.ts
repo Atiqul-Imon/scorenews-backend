@@ -59,7 +59,9 @@ export class CommentaryService {
    * Get in-house commentary for a match
    */
   async getInHouseCommentary(matchId: string, innings?: number): Promise<any[]> {
-    const query: any = { matchId, isActive: true };
+    // Convert matchId to string to ensure type consistency
+    const matchIdStr = String(matchId);
+    const query: any = { matchId: matchIdStr, isActive: true };
     if (innings !== undefined) {
       query.innings = innings;
     }
@@ -69,9 +71,15 @@ export class CommentaryService {
       .sort({ innings: 1, over: 1, ball: 1, commentaryType: 1, order: 1, createdAt: 1 })
       .lean();
 
-    this.logger.log(`Retrieved ${commentary.length} in-house commentary entries for match ${matchId}${innings ? `, innings ${innings}` : ''}`, 'CommentaryService');
+    this.logger.log(`Retrieved ${commentary.length} in-house commentary entries for match ${matchIdStr}${innings ? `, innings ${innings}` : ''}`, 'CommentaryService');
     if (commentary.length > 0) {
-      this.logger.debug(`Sample in-house commentary: over=${commentary[0].over}, ball=${commentary[0].ball}, type=${commentary[0].commentaryType}`, 'CommentaryService');
+      this.logger.debug(`Sample in-house commentary: over=${commentary[0].over}, ball=${commentary[0].ball}, type=${commentary[0].commentaryType}, matchId=${commentary[0].matchId}`, 'CommentaryService');
+    } else {
+      // Debug: Check if there are any commentary entries with different matchId format
+      const allCommentary = await this.commentaryModel.find({ isActive: true }).limit(5).lean();
+      if (allCommentary.length > 0) {
+        this.logger.debug(`Sample matchId from DB: ${allCommentary[0].matchId} (type: ${typeof allCommentary[0].matchId}), Searching for: ${matchIdStr} (type: ${typeof matchIdStr})`, 'CommentaryService');
+      }
     }
 
     return commentary;
@@ -158,8 +166,27 @@ export class CommentaryService {
     );
 
     // Combine all commentary
-    const all = [...mergedFirstInnings, ...mergedSecondInnings].sort((a, b) => {
-      // Sort by timestamp (newest first)
+    // IMPORTANT: Don't re-sort by timestamp alone - preserve the order from mergeInningsCommentary
+    // which already sorts by over/ball (newest first) and within groups (pre-ball -> ball -> post-ball)
+    const all = [...mergedFirstInnings, ...mergedSecondInnings];
+    
+    // Final sort: by over and ball (newest first), then by type within same over.ball
+    all.sort((a, b) => {
+      // First sort by over (newest first)
+      if (a.over !== b.over) return b.over - a.over;
+      
+      // Then by ball (newest first)
+      const ballA = a.ballNumber ?? a.ball ?? 0;
+      const ballB = b.ballNumber ?? b.ball ?? 0;
+      if (ballA !== ballB) return ballB - ballA;
+      
+      // Within same over.ball, sort by type: pre-ball -> ball -> post-ball
+      const typeOrder: Record<string, number> = { 'pre-ball': 0, ball: 1, 'post-ball': 2 };
+      const orderA = typeOrder[a.commentaryType || 'ball'] ?? 1;
+      const orderB = typeOrder[b.commentaryType || 'ball'] ?? 1;
+      if (orderA !== orderB) return orderA - orderB;
+      
+      // For same type, sort by timestamp (newest first)
       const timeA = new Date(a.timestamp || 0).getTime();
       const timeB = new Date(b.timestamp || 0).getTime();
       return timeB - timeA;
@@ -203,6 +230,7 @@ export class CommentaryService {
     });
 
     // Add in-house entries
+    this.logger.log(`Adding ${inHouseEntries.length} in-house entries to merge`, 'CommentaryService');
     inHouseEntries.forEach((entry) => {
       // Create a unique key that groups pre-ball, ball, and post-ball together
       // Pre-ball commentary is for the NEXT ball (e.g., pre-ball for 18.6 should appear before 18.6 ball)
@@ -210,6 +238,8 @@ export class CommentaryService {
       // So we group by the ball number they're associated with
       const ballNum = entry.ball !== null && entry.ball !== undefined ? entry.ball : 0;
       const key = `${entry.over}-${ballNum}`;
+      
+      this.logger.debug(`Adding in-house entry: over=${entry.over}, ball=${entry.ball}, type=${entry.commentaryType}, key=${key}`, 'CommentaryService');
       
       if (!grouped[key]) {
         grouped[key] = [];
@@ -231,6 +261,8 @@ export class CommentaryService {
         innings: entry.innings,
       });
     });
+    
+    this.logger.log(`Total groups after adding in-house: ${Object.keys(grouped).length}`, 'CommentaryService');
 
     // Sort each group and merge
     Object.keys(grouped)
@@ -268,6 +300,10 @@ export class CommentaryService {
 
         merged.push(...entries);
       });
+
+    this.logger.log(`Merged result: ${merged.length} total entries (SportsMonk: ${sportsMonkEntries.length}, In-House: ${inHouseEntries.length})`, 'CommentaryService');
+    const inHouseInMerged = merged.filter((e) => e.source === 'in-house').length;
+    this.logger.log(`In-house entries in merged result: ${inHouseInMerged}`, 'CommentaryService');
 
     return merged;
   }
