@@ -335,6 +335,53 @@ export class SportsMonksService {
     try {
       // No caching - always fetch fresh data
       const baseUrl = this.getBaseUrl(sport);
+      
+      // CRITICAL: For live matches, use /livescores endpoint first (more real-time)
+      // Then fall back to /fixtures/{id} if not found in livescores
+      // The /livescores endpoint is updated more frequently than /fixtures/{id}
+      let match: any = null;
+      let response: any = null;
+      
+      // Add timestamp to prevent caching - ensure fresh data
+      const timestamp = Date.now();
+      
+      // Strategy 1: Try /livescores endpoint first (more real-time for live matches)
+      if (sport === 'cricket') {
+        try {
+          this.logger.log(`[Match ${matchId}] Attempting to fetch from /livescores endpoint (more real-time)...`, 'SportsMonksService');
+          const livescoresResponse = await firstValueFrom(
+            this.httpService.get(`${baseUrl}/livescores`, {
+              params: {
+                api_token: this.apiToken,
+                include: 'scoreboards,localteam,visitorteam,venue',
+                _t: timestamp,
+              },
+              headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
+              },
+            }),
+          );
+          
+          const livescoresMatches = livescoresResponse.data?.data || [];
+          const liveMatch = livescoresMatches.find((m: any) => m.id?.toString() === matchId.toString());
+          
+          if (liveMatch) {
+            this.logger.log(`[Match ${matchId}] Found in /livescores endpoint, fetching full details...`, 'SportsMonksService');
+            match = liveMatch;
+            // Now fetch full details with batting/bowling from /fixtures/{id}
+            // But we'll use the scoreboards from /livescores which are more up-to-date
+          } else {
+            this.logger.log(`[Match ${matchId}] Not found in /livescores, will try /fixtures/{id}...`, 'SportsMonksService');
+          }
+        } catch (livescoresError: any) {
+          this.logger.warn(`[Match ${matchId}] /livescores endpoint failed: ${livescoresError.message}, will try /fixtures/{id}...`, 'SportsMonksService');
+        }
+      }
+      
+      // Strategy 2: Fetch full details from /fixtures/{id} (has batting/bowling data)
+      // If we found match in livescores, we'll merge the scoreboards from livescores with full details from fixtures
       // v2.0 uses different includes than v3
       // Include batting and bowling for detailed match statistics
       // For SportMonks v2.0 cricket API, use simpler include format
@@ -342,17 +389,12 @@ export class SportsMonksService {
       // Try to include batting/bowling data with player details
       // NOTE: The /fixtures/{id} endpoint may reject certain include parameters
       // Strategy: Try nested includes first, then batting/bowling without .player, then simpler includes
-      let match: any = null;
-      let response: any = null;
       
       // Try 1: Include batting.batsman,bowling.bowler (v2.0 API uses batsman/bowler, not player)
       // According to v2.0 API docs, the correct includes are batting.batsman and bowling.bowler
       let includeParam = sport === 'cricket' 
         ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
         : 'scores,participants,lineups,events';
-      
-      // Add timestamp to prevent caching - ensure fresh data for current batters/bowlers
-      const timestamp = Date.now();
       
       try {
         response = await firstValueFrom(
@@ -369,7 +411,24 @@ export class SportsMonksService {
             },
           }),
         );
-        match = response.data?.data;
+        const fixturesMatch = response.data?.data;
+        
+        // CRITICAL: If we found match in livescores, prefer its scoreboards (more up-to-date)
+        // But use batting/bowling and other details from fixtures
+        if (match && fixturesMatch) {
+          this.logger.log(`[Match ${matchId}] Merging /livescores scoreboards with /fixtures/{id} full details...`, 'SportsMonksService');
+          match = {
+            ...fixturesMatch,
+            // Prefer scoreboards from livescores (more real-time)
+            scoreboards: match.scoreboards || fixturesMatch.scoreboards,
+            // But keep status from livescores if it's more recent
+            status: match.status || fixturesMatch.status,
+            live: match.live !== undefined ? match.live : fixturesMatch.live,
+          };
+        } else {
+          match = fixturesMatch || match;
+        }
+        
         this.logger.log(`[Match ${matchId}] Successfully fetched with nested player includes`, 'SportsMonksService');
       } catch (firstError: any) {
         // If 400 error, try without nested .player includes
