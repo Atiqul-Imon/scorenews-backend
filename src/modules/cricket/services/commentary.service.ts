@@ -205,8 +205,9 @@ export class CommentaryService {
     // Add in-house entries
     inHouseEntries.forEach((entry) => {
       // Create a unique key that groups pre-ball, ball, and post-ball together
-      // For pre-ball and post-ball, use the ball number if available
-      // For ball commentary, use the ball number
+      // Pre-ball commentary is for the NEXT ball (e.g., pre-ball for 18.6 should appear before 18.6 ball)
+      // Post-ball commentary is for the CURRENT ball (e.g., post-ball for 18.5 should appear after 18.5 ball)
+      // So we group by the ball number they're associated with
       const ballNum = entry.ball !== null && entry.ball !== undefined ? entry.ball : 0;
       const key = `${entry.over}-${ballNum}`;
       
