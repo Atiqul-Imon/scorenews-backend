@@ -19,6 +19,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
+      cwd: '/var/www/sports-platform-api', // Ensure PM2 runs from correct directory
       env: {
         NODE_ENV: 'development',
         PORT: 5000,
@@ -27,6 +28,8 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 5000,
       },
+      // Load environment variables from .env file
+      env_file: '.env',
       error_file: './logs/pm2-error.log',
       out_file: './logs/pm2-out.log',
       log_file: './logs/pm2-combined.log',
