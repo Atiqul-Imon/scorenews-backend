@@ -186,7 +186,14 @@ export class CommentaryService {
       const orderB = typeOrder[b.commentaryType || 'ball'] ?? 1;
       if (orderA !== orderB) return orderA - orderB;
       
-      // For same type, sort by timestamp (newest first)
+      // For same type, sort by order field (for post-ball), then by timestamp
+      if (a.commentaryType === 'post-ball' && b.commentaryType === 'post-ball') {
+        const postOrderA = a.order ?? 0;
+        const postOrderB = b.order ?? 0;
+        if (postOrderA !== postOrderB) return postOrderA - postOrderB;
+      }
+      
+      // For same type and order, sort by timestamp (newest first)
       const timeA = new Date(a.timestamp || 0).getTime();
       const timeB = new Date(b.timestamp || 0).getTime();
       return timeB - timeA;
