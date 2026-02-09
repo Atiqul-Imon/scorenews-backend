@@ -15,6 +15,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { TimeoutInterceptor } from './common/interceptors/timeout.interceptor';
 import { WinstonLoggerService } from './common/logger/winston-logger.service';
 
+// Updated: 2026-02-10 - Deployment trigger for CI/CD pipeline
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
