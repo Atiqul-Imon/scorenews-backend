@@ -60,10 +60,9 @@ export class CricketService {
           };
         }
       } else {
-        // Database has matches, trigger background update for next request
-        this.liveMatchService.fetchAndUpdateLiveMatches().catch((err) => {
-          this.logger.error('Background update of live matches failed', err.stack, 'CricketService');
-        });
+        // Database has matches - scheduler handles updates, don't trigger API calls from user requests
+        // This prevents rate limiting when multiple users access the site
+        this.logger.log(`Returning ${matches.length} live matches from database (scheduler handles updates)`, 'CricketService');
       }
       
       return {
@@ -72,20 +71,12 @@ export class CricketService {
       };
     } catch (error: any) {
       this.logger.error('Error getting live matches', error.stack, 'CricketService');
-      // Fallback: try to fetch from API
-      try {
-        const matches = await this.liveMatchService.fetchAndUpdateLiveMatches();
-        return {
-          success: true,
-          data: matches,
-        };
-      } catch (fallbackError: any) {
-        this.logger.error('Fallback fetch also failed', fallbackError.stack, 'CricketService');
-        return {
-          success: true,
-          data: [],
-        };
-      }
+      // Don't fallback to API - scheduler handles updates
+      // Return empty array to avoid rate limiting
+      return {
+        success: true,
+        data: [],
+      };
     }
   }
 
@@ -134,23 +125,8 @@ export class CricketService {
       // First check database for quick response
       const liveMatch = await this.liveMatchService.getLiveMatchById(id);
       if (liveMatch) {
-        // For live matches, also trigger background refresh from API
-        // This ensures data stays fresh while returning cached data immediately
-        this.sportsMonksService.getMatchDetails(id, 'cricket')
-          .then(async (apiMatch) => {
-            if (apiMatch) {
-              const statusResult = determineMatchStatus(apiMatch);
-              if (statusResult.status === 'live') {
-                // Background refresh - update database with fresh data
-                await this.liveMatchService.fetchAndUpdateLiveMatches();
-              }
-            }
-          })
-          .catch((err) => {
-            // Silently fail background refresh - don't block response
-            this.logger.warn(`Background refresh failed for match ${id}: ${err.message}`, 'CricketService');
-          });
-        
+        // Return match from database - scheduler handles updates to avoid rate limiting
+        // Don't trigger API calls from user requests
         return {
           success: true,
           data: liveMatch,
@@ -174,12 +150,12 @@ export class CricketService {
           const statusResult = determineMatchStatus(apiMatch);
           
           if (statusResult.status === 'live') {
-            // Fetch and update all live matches (includes this one)
-            await this.liveMatchService.fetchAndUpdateLiveMatches();
-            const match = await this.liveMatchService.getLiveMatchById(id);
-            if (match) {
-              return { success: true, data: match };
-            }
+            // Match is live but not in database - scheduler will pick it up
+            // Don't fetch all live matches here to avoid rate limiting
+            // Just return the API match data directly
+            this.logger.warn(`Match ${id} is live but not in database - scheduler will add it`, 'CricketService');
+            // Return API match directly (transformed if needed)
+            return { success: true, data: apiMatch };
           } else if (statusResult.status === 'completed') {
             // Use getCompletedMatchById which handles single match fetch efficiently
             const match = await this.completedMatchService.getCompletedMatchById(id);
