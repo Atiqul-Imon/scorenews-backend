@@ -31,8 +31,16 @@ export class MatchTransitionService {
       const liveMatches = await this.liveMatchService.getLiveMatches();
       const transitions: string[] = [];
 
-      for (const match of liveMatches) {
+      // Process matches one at a time with delays to avoid rate limiting
+      for (let i = 0; i < liveMatches.length; i++) {
+        const match = liveMatches[i];
         try {
+          // Add delay between checks to avoid rate limiting (except for first match)
+          if (i > 0) {
+            // 2 second delay between each match check
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+          
           // Check if match is completed
           const isMatchCompleted = await this.liveMatchService.checkMatchCompletion(match.matchId);
           
@@ -42,6 +50,7 @@ export class MatchTransitionService {
           }
         } catch (error: any) {
           this.logger.error(`Error checking match ${match.matchId} for transition`, error.stack, 'MatchTransitionService');
+          // Continue with next match even if this one fails
         }
       }
 

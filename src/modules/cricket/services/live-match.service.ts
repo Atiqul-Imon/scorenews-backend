@@ -60,8 +60,15 @@ export class LiveMatchService {
         return [];
       }
 
+      // Get match IDs from API
+      const apiMatchIds = new Set(apiMatches.map((m: any) => m.id?.toString()));
+      
+      // If no live matches from API, check if we have matches in database that might be completed
+      // These should be handled by the transition service, but we log for visibility
       if (apiMatches.length === 0) {
-        this.logger.warn('No live matches returned from API', 'LiveMatchService');
+        this.logger.warn('No live matches returned from API - transition service will check database matches', 'LiveMatchService');
+        // Don't return empty - let transition service handle completed matches
+        // Return empty array so we don't process anything, but transition service will check
         return [];
       }
 
@@ -623,12 +630,22 @@ export class LiveMatchService {
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
+        // Add delay before each attempt to avoid rate limiting (especially important for first attempt)
+        if (attempt > 0) {
+          // Exponential backoff: 2s, 4s, 8s
+          const delay = 2000 * Math.pow(2, attempt - 1);
+          this.logger.log(`Waiting ${delay}ms before retry attempt ${attempt + 1} for match ${matchId}...`, 'LiveMatchService');
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          // Even for first attempt, add a small delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
         // Fetch fresh data from API
         const apiMatch = await this.sportsMonksService.getMatchDetails(matchId, 'cricket');
         if (!apiMatch) {
           if (attempt < retries) {
             this.logger.warn(`API returned null for match ${matchId}, retrying... (attempt ${attempt + 1}/${retries + 1})`, 'LiveMatchService');
-            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
             continue;
           }
           return false;
@@ -643,9 +660,22 @@ export class LiveMatchService {
         
         return isCompleted;
       } catch (error: any) {
+        // Check if it's a rate limit error
+        if (error.response?.status === 400 && error.response?.data?.message?.message?.includes('Too Many Attempts')) {
+          this.logger.warn(`Rate limit hit for match ${matchId}, will retry after longer delay...`, 'LiveMatchService');
+          if (attempt < retries) {
+            // Longer delay for rate limit errors: 10s, 20s, 40s
+            const delay = 10000 * Math.pow(2, attempt);
+            this.logger.log(`Waiting ${delay}ms before retry (rate limit backoff)...`, 'LiveMatchService');
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+        }
+        
         if (attempt < retries) {
           this.logger.warn(`Error checking completion for match ${matchId}, retrying... (attempt ${attempt + 1}/${retries + 1})`, 'LiveMatchService');
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
+          // Exponential backoff for other errors
+          await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt)));
           continue;
         }
         this.logger.error(`Error checking completion for match ${matchId} after ${retries + 1} attempts`, error.stack, 'LiveMatchService');
