@@ -86,7 +86,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         football: footballMatches,
       });
 
-      // Set up periodic updates (every 30 seconds)
+      // Set up periodic updates (every 15 seconds for real-time updates)
       const interval = setInterval(async () => {
         try {
           const [cricket, football] = await Promise.all([
@@ -102,7 +102,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         } catch (error) {
           this.logger.error('Error updating live matches', error);
         }
-      }, 30000);
+      }, 15000); // 15 seconds - matches API update frequency
 
       // Store interval for cleanup
       this.matchUpdateIntervals.set(client.id, interval);
