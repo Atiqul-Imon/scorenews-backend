@@ -48,15 +48,16 @@ export class MatchSchedulerService implements OnModuleInit {
       }
     }, 120000); // 2 minutes - reduced to avoid rate limiting
 
-    // 2. Update live matches every 60 seconds (reduced frequency to avoid rate limiting)
+    // 2. Update live matches every 15 seconds for real-time UI updates via WebSocket
     // Note: getMatchDetails is only called when user requests match details page, not during background updates
+    // This avoids rate limiting while maintaining real-time updates
     this.liveUpdateInterval = setInterval(async () => {
       try {
         await this.liveMatchService.fetchAndUpdateLiveMatches();
       } catch (error: any) {
         this.logger.error('Error in live match update scheduler', error.stack, 'MatchSchedulerService');
       }
-    }, 60000); // 60 seconds - reduced to avoid rate limiting
+    }, 15000); // 15 seconds - real-time updates for WebSocket broadcasting
 
     // 3. Sync completed matches every hour
     this.completedSyncInterval = setInterval(async () => {
