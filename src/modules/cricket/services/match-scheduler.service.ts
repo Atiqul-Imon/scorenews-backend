@@ -39,23 +39,24 @@ export class MatchSchedulerService implements OnModuleInit {
   private startSchedulers() {
     this.logger.log('Starting match schedulers...', 'MatchSchedulerService');
 
-    // 1. Check for match transitions every 30 seconds
+    // 1. Check for match transitions every 2 minutes (reduced frequency to avoid rate limiting)
     this.transitionInterval = setInterval(async () => {
       try {
         await this.matchTransitionService.processTransitions();
       } catch (error: any) {
         this.logger.error('Error in transition scheduler', error.stack, 'MatchSchedulerService');
       }
-    }, 30000); // 30 seconds
+    }, 120000); // 2 minutes - reduced to avoid rate limiting
 
-    // 2. Update live matches every 15 seconds (more frequent for real-time updates of current batters/bowlers)
+    // 2. Update live matches every 60 seconds (reduced frequency to avoid rate limiting)
+    // Note: getMatchDetails is only called when user requests match details page, not during background updates
     this.liveUpdateInterval = setInterval(async () => {
       try {
         await this.liveMatchService.fetchAndUpdateLiveMatches();
       } catch (error: any) {
         this.logger.error('Error in live match update scheduler', error.stack, 'MatchSchedulerService');
       }
-    }, 15000); // 15 seconds - more frequent updates for current batters/bowlers
+    }, 60000); // 60 seconds - reduced to avoid rate limiting
 
     // 3. Sync completed matches every hour
     this.completedSyncInterval = setInterval(async () => {

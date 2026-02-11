@@ -73,26 +73,12 @@ export class LiveMatchService {
           // Log raw API match data for debugging
           this.logger.log(`Processing API match: id=${apiMatch.id}, state_id=${apiMatch.state_id}, status=${apiMatch.status}, live=${apiMatch.live}`, 'LiveMatchService');
           
-          // ALWAYS fetch full match details to get batting, bowling, and complete scorecard data
-          // This ensures we have all available data from the API
+          // CRITICAL: Do NOT fetch full match details during background updates to avoid rate limiting
+          // getMatchDetails() is expensive (multiple API calls with retries)
+          // Only use livescores data for background updates - it contains scoreboards with batting/bowling nested
+          // Full details will be fetched when user requests match details page
           let matchData = apiMatch;
-          try {
-            this.logger.log(`Fetching full details for match ${apiMatch.id} to get batting/bowling data...`, 'LiveMatchService');
-            const fullDetails = await this.sportsMonksService.getMatchDetails(apiMatch.id.toString(), 'cricket');
-            if (fullDetails) {
-              // Merge: use full details but keep live status from livescores
-              matchData = {
-                ...fullDetails,
-                live: apiMatch.live, // Keep live status from livescores
-                status: apiMatch.status, // Keep status from livescores
-                state_id: apiMatch.state_id, // Keep state_id from livescores
-              };
-              this.logger.log(`Fetched full details for match ${apiMatch.id} (has batting: ${!!fullDetails.batting}, has bowling: ${!!fullDetails.bowling})`, 'LiveMatchService');
-            }
-          } catch (detailError: any) {
-            this.logger.warn(`Failed to fetch full details for match ${apiMatch.id}: ${detailError.message}, using livescores data only`, 'LiveMatchService');
-            // Continue with livescores data - transformer will handle it
-          }
+          this.logger.log(`Using livescores data for match ${apiMatch.id} (scoreboards should contain batting/bowling)`, 'LiveMatchService');
           
           // CRITICAL: Matches from /livescores endpoint should be considered LIVE by default
           // Only exclude if they are explicitly marked as completed

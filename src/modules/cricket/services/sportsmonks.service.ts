@@ -406,10 +406,11 @@ export class SportsMonksService {
       // NOTE: The /fixtures/{id} endpoint may reject certain include parameters
       // Strategy: Try nested includes first, then batting/bowling without .player, then simpler includes
       
-      // Try 1: Include batting.batsman,bowling.bowler (v2.0 API uses batsman/bowler, not player)
-      // According to v2.0 API docs, the correct includes are batting.batsman and bowling.bowler
+      // Try 1: For v2.0 API, scoreboards contain batting/bowling nested inside
+      // Use scoreboards include which should include batting/bowling data
+      // Avoid separate batting/bowling includes that may not be supported by subscription
       let includeParam = sport === 'cricket' 
-        ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
+        ? 'localteam,visitorteam,scoreboards,venue,league,season' 
         : 'participants;state;league;scores;lineups;events';
       
       try {
@@ -447,21 +448,22 @@ export class SportsMonksService {
         
         this.logger.log(`[Match ${matchId}] Successfully fetched with nested player includes`, 'SportsMonksService');
       } catch (firstError: any) {
-        // If 400 error, try without nested .player includes
+        // If 400 error, try with minimal includes (scoreboards should contain batting/bowling nested)
+        // Avoid multiple retries to prevent rate limiting
         if (firstError.response?.status === 400) {
-          this.logger.warn(`[Match ${matchId}] 400 error with nested includes: ${includeParam}, trying batting.batsman/bowling.bowler...`, 'SportsMonksService');
+          this.logger.warn(`[Match ${matchId}] 400 error with includes: ${includeParam}, trying minimal scoreboards include...`, 'SportsMonksService');
           
-          // Try 2: Include batting.batsman,bowling.bowler (v2.0 API format)
-          const battingBowlingInclude = sport === 'cricket' 
-            ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
-            : 'participants;state;league;scores;lineups;events';
+          // Try 2: Minimal includes - scoreboards should contain batting/bowling nested inside
+          const minimalInclude = sport === 'cricket' 
+            ? 'localteam,visitorteam,scoreboards,venue' 
+            : 'participants;state;league';
           
           try {
             response = await firstValueFrom(
               this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
                 params: {
                   api_token: apiToken,
-                  include: battingBowlingInclude,
+                  include: minimalInclude,
                   _t: timestamp, // Cache buster
                 },
                 headers: {
@@ -472,69 +474,13 @@ export class SportsMonksService {
               }),
             );
             match = response.data?.data;
-            this.logger.log(`[Match ${matchId}] Successfully fetched with batting.batsman/bowling.bowler includes`, 'SportsMonksService');
+            this.logger.log(`[Match ${matchId}] Successfully fetched with minimal includes (scoreboards should contain batting/bowling)`, 'SportsMonksService');
           } catch (secondError: any) {
-            // If that also fails, try with batting/bowling without any nested includes
-            if (secondError.response?.status === 400) {
-              this.logger.warn(`[Match ${matchId}] 400 error with batting.batsman/bowling.bowler includes, trying batting/bowling without nested includes...`, 'SportsMonksService');
-              
-              // Try 3: Include batting,bowling (without any nested includes)
-              const simpleBattingBowlingInclude = sport === 'cricket' 
-                ? 'localteam,visitorteam,scoreboards,batting,bowling,venue,league,season' 
-                : 'participants;state;league;scores;lineups;events';
-          
-              try {
-                response = await firstValueFrom(
-                  this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
-                    params: {
-                      api_token: apiToken,
-                      include: simpleBattingBowlingInclude,
-                      _t: timestamp, // Cache buster
-                    },
-                    headers: {
-                      'Cache-Control': 'no-cache, no-store, must-revalidate',
-                      'Pragma': 'no-cache',
-                      'Expires': '0',
-                    },
-                  }),
-                );
-                match = response.data?.data;
-                this.logger.log(`[Match ${matchId}] Successfully fetched with batting/bowling (without nested includes)`, 'SportsMonksService');
-              } catch (thirdError: any) {
-                // If that also fails, try with simplest includes (no batting/bowling)
-                if (thirdError.response?.status === 400) {
-                  this.logger.warn(`[Match ${matchId}] 400 error with batting/bowling includes, trying simplest includes...`, 'SportsMonksService');
-                  const simpleIncludeParam = sport === 'cricket' 
-                    ? 'localteam,visitorteam,scoreboards,venue' 
-                    : 'participants;state;league';
-                  try {
-                    response = await firstValueFrom(
-                      this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
-                        params: {
-                          api_token: apiToken,
-                          include: simpleIncludeParam,
-                          _t: timestamp, // Cache buster
-                        },
-                        headers: {
-                          'Cache-Control': 'no-cache, no-store, must-revalidate',
-                          'Pragma': 'no-cache',
-                          'Expires': '0',
-                        },
-                      }),
-                    );
-                    match = response.data?.data;
-                    this.logger.log(`[Match ${matchId}] Successfully fetched with simplest includes (no batting/bowling)`, 'SportsMonksService');
-                  } catch (fourthError: any) {
-                    this.logger.error(`[Match ${matchId}] All retry attempts failed. Last error: ${fourthError.response?.status} - ${JSON.stringify(fourthError.response?.data || {})}`, '', 'SportsMonksService');
-                    throw firstError; // Throw original error
-                  }
-                } else {
-                  throw thirdError;
-                }
-              }
-            } else {
-              throw secondError;
-            }
+            // If minimal includes also fail, log but don't throw - use whatever data we have
+            this.logger.error(`[Match ${matchId}] Failed with minimal includes: ${secondError.response?.status} - ${JSON.stringify(secondError.response?.data || {})}`, '', 'SportsMonksService');
+            // Don't throw - continue with match data from livescores if available
+            // The transformer will handle missing batting/bowling gracefully
+            this.logger.warn(`[Match ${matchId}] Continuing with available data (may not have batting/bowling from fixtures)`, 'SportsMonksService');
           }
         } else {
           throw firstError;
