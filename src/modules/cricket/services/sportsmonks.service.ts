@@ -9,7 +9,8 @@ type Sport = 'cricket' | 'football';
 
 @Injectable()
 export class SportsMonksService {
-  private apiToken: string;
+  private cricketApiToken: string;
+  private footballApiToken: string;
 
   constructor(
     private httpService: HttpService,
@@ -17,7 +18,15 @@ export class SportsMonksService {
     private redisService: RedisService,
     private logger: WinstonLoggerService,
   ) {
-    this.apiToken = this.configService.get<string>('SPORTMONKS_API_TOKEN', '');
+    this.cricketApiToken = this.configService.get<string>('SPORTSMONKS_API_TOKEN', '');
+    this.footballApiToken = this.configService.get<string>('SPORTSMONK_FOOTBALL_API_TOKEN', '');
+  }
+
+  private getApiToken(sport: Sport): string {
+    if (sport === 'football') {
+      return this.footballApiToken || this.cricketApiToken; // Fallback to cricket token if football token not set
+    }
+    return this.cricketApiToken;
   }
 
   private getBaseUrl(sport: Sport): string {
@@ -37,21 +46,22 @@ export class SportsMonksService {
       
       this.logger.log(`Fetching live matches from ${endpoint}`, 'SportsMonksService');
       
-      // Use include parameters for v2.0 API
-      // NOTE: The /livescores endpoint has very limited allowed includes
-      // Even basic batting/bowling might not be allowed - use only core includes
-      // We'll fetch full match details later using getMatchDetails() to get complete player data
-      // For /livescores, use only the most basic includes that are definitely allowed
+      // Use include parameters for v2.0 API (cricket) and v3 API (football)
+      // NOTE: v2.0 uses commas, v3 uses semicolons for includes
+      // For cricket v2.0: /livescores endpoint has very limited allowed includes
+      // For football v3: use semicolons to separate includes
       const includeParam = sport === 'cricket' 
         ? 'scoreboards,localteam,visitorteam,venue' 
-        : 'scores,participants';
+        : 'participants;state;league';
       
-      if (!this.apiToken) {
-        this.logger.error('SPORTMONKS_API_TOKEN is missing!', '', 'SportsMonksService');
-        throw new Error('SportsMonks API token is not configured');
+      const apiToken = this.getApiToken(sport);
+      if (!apiToken) {
+        const tokenName = sport === 'football' ? 'SPORTSMONK_FOOTBALL_API_TOKEN' : 'SPORTSMONKS_API_TOKEN';
+        this.logger.error(`${tokenName} is missing!`, '', 'SportsMonksService');
+        throw new Error(`SportsMonks ${sport} API token is not configured`);
       }
       
-      this.logger.log(`Calling v2.0 API: ${endpoint}`, 'SportsMonksService');
+      this.logger.log(`Calling ${sport === 'cricket' ? 'v2.0' : 'v3'} API: ${endpoint}`, 'SportsMonksService');
       
       // Add timestamp to prevent caching - ensure fresh data for current batters/bowlers
       const timestamp = Date.now();
@@ -59,7 +69,7 @@ export class SportsMonksService {
       const response = await firstValueFrom(
         this.httpService.get(endpoint, {
           params: {
-            api_token: this.apiToken,
+            api_token: apiToken,
             include: includeParam,
             _t: timestamp, // Cache buster
           },
@@ -101,7 +111,8 @@ export class SportsMonksService {
       if (matches.length > 0) {
         // Log COMPLETE structure of first match to see ALL available fields
         const firstMatch = matches[0];
-        this.logger.log(`=== COMPLETE SPORTSMONKS V2 API RESPONSE STRUCTURE ===`, 'SportsMonksService');
+        const apiVersion = sport === 'cricket' ? 'V2' : 'V3';
+        this.logger.log(`=== COMPLETE SPORTSMONKS ${apiVersion} API RESPONSE STRUCTURE ===`, 'SportsMonksService');
         this.logger.log(`All top-level keys in match object: ${JSON.stringify(Object.keys(firstMatch))}`, 'SportsMonksService');
         this.logger.log(`Complete first match structure: ${JSON.stringify(firstMatch, null, 2)}`, 'SportsMonksService');
         
@@ -168,7 +179,10 @@ export class SportsMonksService {
       // No caching - always fetch fresh data
       const baseUrl = this.getBaseUrl(sport);
       // Include player data for batting/bowling to get real player names
-      const includeParam = sport === 'cricket' ? 'scoreboards,localteam,visitorteam,venue,batting.player,bowling.player' : 'scores,participants';
+      // v2.0 uses commas, v3 uses semicolons
+      const includeParam = sport === 'cricket' 
+        ? 'scoreboards,localteam,visitorteam,venue,batting.player,bowling.player' 
+        : 'participants;state;league;scores';
       
       // For v2.0 API, use the fixtures endpoint for completed matches
       // NOTE: The /scores endpoint does not exist in SportsMonks v2.0 API
@@ -182,11 +196,12 @@ export class SportsMonksService {
       
       try {
         // Use fixtures endpoint (scores endpoint doesn't exist in v2.0)
+        const apiToken = this.getApiToken(sport);
         this.logger.log(`Calling SportMonks API: ${baseUrl}/fixtures`, 'SportsMonksService');
         const response = await firstValueFrom(
           this.httpService.get(`${baseUrl}/fixtures`, {
             params: {
-              api_token: this.apiToken,
+              api_token: apiToken,
               include: includeParam,
               per_page: 250,
             },
@@ -346,13 +361,14 @@ export class SportsMonksService {
       const timestamp = Date.now();
       
       // Strategy 1: Try /livescores endpoint first (more real-time for live matches)
+      const apiToken = this.getApiToken(sport);
       if (sport === 'cricket') {
         try {
           this.logger.log(`[Match ${matchId}] Attempting to fetch from /livescores endpoint (more real-time)...`, 'SportsMonksService');
           const livescoresResponse = await firstValueFrom(
             this.httpService.get(`${baseUrl}/livescores`, {
               params: {
-                api_token: this.apiToken,
+                api_token: apiToken,
                 include: 'scoreboards,localteam,visitorteam,venue',
                 _t: timestamp,
               },
@@ -394,13 +410,13 @@ export class SportsMonksService {
       // According to v2.0 API docs, the correct includes are batting.batsman and bowling.bowler
       let includeParam = sport === 'cricket' 
         ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
-        : 'scores,participants,lineups,events';
+        : 'participants;state;league;scores;lineups;events';
       
       try {
         response = await firstValueFrom(
           this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
             params: {
-              api_token: this.apiToken,
+              api_token: apiToken,
               include: includeParam,
               _t: timestamp, // Cache buster
             },
@@ -438,13 +454,13 @@ export class SportsMonksService {
           // Try 2: Include batting.batsman,bowling.bowler (v2.0 API format)
           const battingBowlingInclude = sport === 'cricket' 
             ? 'localteam,visitorteam,scoreboards,batting.batsman,bowling.bowler,venue,league,season' 
-            : 'scores,participants,lineups,events';
+            : 'participants;state;league;scores;lineups;events';
           
           try {
             response = await firstValueFrom(
               this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
                 params: {
-                  api_token: this.apiToken,
+                  api_token: apiToken,
                   include: battingBowlingInclude,
                   _t: timestamp, // Cache buster
                 },
@@ -465,13 +481,13 @@ export class SportsMonksService {
               // Try 3: Include batting,bowling (without any nested includes)
               const simpleBattingBowlingInclude = sport === 'cricket' 
                 ? 'localteam,visitorteam,scoreboards,batting,bowling,venue,league,season' 
-                : 'scores,participants,lineups,events';
+                : 'participants;state;league;scores;lineups;events';
           
               try {
                 response = await firstValueFrom(
                   this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
                     params: {
-                      api_token: this.apiToken,
+                      api_token: apiToken,
                       include: simpleBattingBowlingInclude,
                       _t: timestamp, // Cache buster
                     },
@@ -490,12 +506,12 @@ export class SportsMonksService {
                   this.logger.warn(`[Match ${matchId}] 400 error with batting/bowling includes, trying simplest includes...`, 'SportsMonksService');
                   const simpleIncludeParam = sport === 'cricket' 
                     ? 'localteam,visitorteam,scoreboards,venue' 
-                    : 'scores,participants';
+                    : 'participants;state;league';
                   try {
                     response = await firstValueFrom(
                       this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
                         params: {
-                          api_token: this.apiToken,
+                          api_token: apiToken,
                           include: simpleIncludeParam,
                           _t: timestamp, // Cache buster
                         },
@@ -630,10 +646,11 @@ export class SportsMonksService {
       // No caching - always fetch fresh data
       // v2.0 API for cricket players
       const baseUrl = 'https://cricket.sportmonks.com/api/v2.0';
+      const apiToken = this.getApiToken('cricket');
       const response = await firstValueFrom(
         this.httpService.get(`${baseUrl}/players/${playerId}`, {
           params: {
-            api_token: this.apiToken,
+            api_token: apiToken,
           },
         }),
       );
@@ -663,13 +680,14 @@ export class SportsMonksService {
       
       // Add timestamp to prevent caching - ensure fresh commentary data
       const timestamp = Date.now();
+      const apiToken = this.getApiToken(sport);
       
       // First try: with all available includes
       try {
         response = await firstValueFrom(
           this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
             params: {
-              api_token: this.apiToken,
+              api_token: apiToken,
               include: 'balls.batsman,balls.bowler,balls.score,balls.batsmanout,balls.catchstump',
               _t: timestamp, // Cache buster
             },
@@ -689,7 +707,7 @@ export class SportsMonksService {
             response = await firstValueFrom(
               this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
                 params: {
-                  api_token: this.apiToken,
+                  api_token: apiToken,
                   include: 'balls',
                   _t: timestamp, // Cache buster
                 },

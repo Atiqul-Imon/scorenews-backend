@@ -45,7 +45,8 @@ export const configValidationSchema = Joi.object({
   FOOTBALL_API_KEY: Joi.string().optional(),
   ESPN_API_KEY: Joi.string().optional(),
   SPORTMONKS_BASE_URL: Joi.string().optional(),
-  SPORTMONKS_API_TOKEN: Joi.string().optional(),
+  SPORTSMONKS_API_TOKEN: Joi.string().optional(),
+  SPORTSMONK_FOOTBALL_API_TOKEN: Joi.string().optional(),
 
   // Email
   SMTP_HOST: Joi.string().optional(),
