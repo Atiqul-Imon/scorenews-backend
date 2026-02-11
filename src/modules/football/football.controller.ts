@@ -13,7 +13,8 @@ export class FootballController {
   @ApiOperation({ summary: 'Get live football matches' })
   @ApiResponse({ status: 200, description: 'Live matches retrieved successfully' })
   async getLiveMatches() {
-    return this.footballService.getLiveMatches();
+    const matches = await this.footballService.getLiveMatches();
+    return { success: true, data: matches };
   }
 
   @Public()
@@ -26,7 +27,8 @@ export class FootballController {
     @Query('league') league?: string,
     @Query('season') season?: string,
   ) {
-    return this.footballService.getFixtures(page, limit, league, season);
+    const result = await this.footballService.getFixtures(page, limit, league, season);
+    return { success: true, data: result.fixtures, pagination: result.pagination };
   }
 
   @Public()
@@ -34,7 +36,8 @@ export class FootballController {
   @ApiOperation({ summary: 'Get completed football matches' })
   @ApiResponse({ status: 200, description: 'Results retrieved successfully' })
   async getResults(@Query('page') page: number = 1, @Query('limit') limit: number = 20) {
-    return this.footballService.getResults(page, limit);
+    const result = await this.footballService.getResults(page, limit);
+    return { success: true, data: result.results, pagination: result.pagination };
   }
 
   @Public()
@@ -44,6 +47,7 @@ export class FootballController {
   @ApiResponse({ status: 200, description: 'Match retrieved successfully' })
   @ApiResponse({ status: 404, description: 'Match not found' })
   async getMatchById(@Param('id') id: string) {
-    return this.footballService.getMatchById(id);
+    const match = await this.footballService.getMatchById(id);
+    return { success: true, data: match };
   }
 }
