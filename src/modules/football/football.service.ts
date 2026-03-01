@@ -7,6 +7,7 @@ import { RedisService } from '../../redis/redis.service';
 import { WinstonLoggerService } from '../../common/logger/winston-logger.service';
 import { SportsMonksService } from '../cricket/services/sportsmonks.service';
 import { transformSportsMonksMatchToFrontend } from '../cricket/utils/match-transformers';
+import { FootballLiveMatchService } from './services/football-live-match.service';
 
 @Injectable()
 export class FootballService {
@@ -16,31 +17,32 @@ export class FootballService {
     private logger: WinstonLoggerService,
     private configService: ConfigService,
     private sportsMonksService: SportsMonksService,
+    private footballLiveMatchService: FootballLiveMatchService,
   ) {}
 
   async getLiveMatches() {
     try {
-      const cachedData = await this.redisService.get('live_football_matches');
-      if (cachedData) {
-        return JSON.parse(cachedData);
+      // CRITICAL: UI should get data from database, not directly from API
+      // Scheduler handles API updates every 30 seconds
+      // This reduces API costs and prevents rate limiting
+      const dbMatches = await this.footballMatchModel
+        .find({ status: 'live' })
+        .sort({ startTime: -1 })
+        .lean();
+      
+      if (dbMatches.length > 0) {
+        this.logger.log(`Returning ${dbMatches.length} live football matches from database (scheduler handles updates)`, 'FootballService');
+        return dbMatches;
       }
-
-      this.logger.log('Fetching live football matches from SportsMonks...', 'FootballService');
-
-      const apiMatches = await this.sportsMonksService.getLiveMatches('football');
-      const transformedMatches = apiMatches.map((match: any) =>
-        transformSportsMonksMatchToFrontend(match, 'football'),
-      );
-      const liveMatches = transformedMatches.filter((match) => match.status === 'live');
-
-      const cacheDuration = this.configService.get<string>('NODE_ENV') === 'production' ? 900 : 30;
-      await this.redisService.set('live_football_matches', JSON.stringify(liveMatches), cacheDuration);
-
-      return liveMatches;
+      
+      // If database is empty, return empty array
+      // Scheduler will fetch on next cycle
+      this.logger.log('No live football matches in database, returning empty array', 'FootballService');
+      return [];
     } catch (error: any) {
-      this.logger.error('Error fetching live football matches', error.stack, 'FootballService');
-      const dbMatches = await this.footballMatchModel.find({ status: 'live' }).sort({ startTime: -1 }).lean();
-      return dbMatches;
+      this.logger.error('Error fetching live football matches from database', error.stack, 'FootballService');
+      // Return empty array to avoid rate limiting
+      return [];
     }
   }
 

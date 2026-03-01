@@ -164,26 +164,19 @@ export class LiveMatchService {
           this.logger.log(`Successfully transformed match ${matchData.id} -> ${transformed.matchId}`, 'LiveMatchService');
           this.logger.log(`Transformed match details: name=${transformed.name}, status=${transformed.status}, format=${transformed.format}`, 'LiveMatchService');
           
-          // Enrich player names if they're missing (fetch from API separately)
-          // This is needed because the API might not include player objects in batting/bowling data
+          // CRITICAL: DO NOT enrich player names during background updates to avoid rate limiting
+          // Player enrichment makes many parallel API calls (20+ per match) which exhausts rate limits
+          // Player names will be enriched when user requests match details page (on-demand)
+          // The /livescores endpoint should include player names in scoreboards.batting/bowling nested data
           const hasBatting = transformed.batting && Array.isArray(transformed.batting) && transformed.batting.length > 0;
           const hasBowling = transformed.bowling && Array.isArray(transformed.bowling) && transformed.bowling.length > 0;
           const hasCurrentBatters = transformed.currentBatters && Array.isArray(transformed.currentBatters) && transformed.currentBatters.length > 0;
           const hasCurrentBowlers = transformed.currentBowlers && Array.isArray(transformed.currentBowlers) && transformed.currentBowlers.length > 0;
           
-          this.logger.log(`[Match ${transformed.matchId}] Before enrichment: batting=${hasBatting ? transformed.batting.length : 0}, bowling=${hasBowling ? transformed.bowling.length : 0}, currentBatters=${hasCurrentBatters ? transformed.currentBatters.length : 0}, currentBowlers=${hasCurrentBowlers ? transformed.currentBowlers.length : 0}`, 'LiveMatchService');
+          this.logger.log(`[Match ${transformed.matchId}] Skipping player enrichment during background update to avoid rate limiting. Data: batting=${hasBatting ? transformed.batting.length : 0}, bowling=${hasBowling ? transformed.bowling.length : 0}, currentBatters=${hasCurrentBatters ? transformed.currentBatters.length : 0}, currentBowlers=${hasCurrentBowlers ? transformed.currentBowlers.length : 0}`, 'LiveMatchService');
           
-          if (hasBatting || hasBowling || hasCurrentBatters || hasCurrentBowlers) {
-            try {
-              await this.enrichPlayerNames(transformed);
-              this.logger.log(`[Match ${transformed.matchId}] Enriched player names successfully`, 'LiveMatchService');
-            } catch (enrichError: any) {
-              this.logger.warn(`[Match ${transformed.matchId}] Failed to enrich player names: ${enrichError.message}`, 'LiveMatchService');
-              // Continue without enrichment - records without names will be filtered out
-            }
-          } else {
-            this.logger.warn(`[Match ${transformed.matchId}] No batting/bowling data to enrich - API did not return batting/bowling arrays`, 'LiveMatchService');
-          }
+          // NOTE: Player names should come from the API's scoreboards.batting/bowling nested data
+          // If names are missing, they will be enriched on-demand when user views match details
           
           // Convert to LiveMatch format - Include ALL available fields from API
           const liveMatch: LiveMatch = {
