@@ -23,12 +23,31 @@ export class MatchTransitionService {
 
   /**
    * Detect matches that have transitioned from live to completed
+   * OPTIMIZED: First check /livescores endpoint to see which matches are still live
+   * Only call getMatchDetails for matches not in /livescores (likely completed)
    */
   async detectTransitions(): Promise<string[]> {
     try {
       this.logger.log('Detecting match transitions...', 'MatchTransitionService');
       
       const liveMatches = await this.liveMatchService.getLiveMatches();
+      if (liveMatches.length === 0) {
+        this.logger.log('No live matches to check for transitions', 'MatchTransitionService');
+        return [];
+      }
+
+      // OPTIMIZATION: First check /livescores endpoint to see which matches are still live
+      // This is a single API call instead of N calls (one per match)
+      let currentLiveMatchIds: Set<string> = new Set();
+      try {
+        const currentLiveMatches = await this.sportsMonksService.getLiveMatches('cricket');
+        currentLiveMatchIds = new Set(currentLiveMatches.map((m: any) => m.id?.toString()));
+        this.logger.log(`Found ${currentLiveMatchIds.size} matches currently in /livescores endpoint`, 'MatchTransitionService');
+      } catch (error: any) {
+        this.logger.warn(`Failed to fetch /livescores for transition check: ${error.message}. Will check each match individually.`, 'MatchTransitionService');
+        // Fall back to individual checks if /livescores fails
+      }
+
       const transitions: string[] = [];
 
       // Process matches one at a time with delays to avoid rate limiting
@@ -37,16 +56,24 @@ export class MatchTransitionService {
         try {
           // Add delay between checks to avoid rate limiting (except for first match)
           if (i > 0) {
-            // 2 second delay between each match check
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            // 3 second delay between each match check to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 3000));
           }
           
-          // Check if match is completed
+          // OPTIMIZATION: If match is still in /livescores, it's still live - skip getMatchDetails call
+          if (currentLiveMatchIds.has(match.matchId)) {
+            this.logger.log(`Match ${match.matchId} is still in /livescores, skipping transition check`, 'MatchTransitionService');
+            continue;
+          }
+          
+          // Match is not in /livescores - check if it's completed via getMatchDetails
+          // This is the source of truth - always use API data, not manual calculations
+          this.logger.log(`Match ${match.matchId} not found in /livescores, checking completion status...`, 'MatchTransitionService');
           const isMatchCompleted = await this.liveMatchService.checkMatchCompletion(match.matchId);
           
           if (isMatchCompleted) {
             transitions.push(match.matchId);
-            this.logger.log(`Match ${match.matchId} detected for transition to completed`, 'MatchTransitionService');
+            this.logger.log(`Match ${match.matchId} detected for transition to completed (via SportsMonk API)`, 'MatchTransitionService');
           }
         } catch (error: any) {
           this.logger.error(`Error checking match ${match.matchId} for transition`, error.stack, 'MatchTransitionService');

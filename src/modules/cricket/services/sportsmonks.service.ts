@@ -41,18 +41,20 @@ export class SportsMonksService {
     try {
       // No caching - always fetch fresh data
       const baseUrl = this.getBaseUrl(sport);
-      // Use v2.0 endpoint for cricket
-      const endpoint = sport === 'cricket' ? `${baseUrl}/livescores` : `${baseUrl}/livescores/inplay`;
+      // Use v2.0 endpoint for cricket, v3 endpoint for football
+      // IMPORTANT: For Football V3, use /livescores NOT /livescores/inplay
+      // /livescores works with European Plan, /inplay may require different subscription
+      const endpoint = sport === 'cricket' ? `${baseUrl}/livescores` : `${baseUrl}/livescores`;
       
       this.logger.log(`Fetching live matches from ${endpoint}`, 'SportsMonksService');
       
       // Use include parameters for v2.0 API (cricket) and v3 API (football)
       // NOTE: v2.0 uses commas, v3 uses semicolons for includes
       // For cricket v2.0: /livescores endpoint has very limited allowed includes
-      // For football v3: use semicolons to separate includes
+      // For football v3: Testing WITHOUT includes first - may require higher subscription tier
       const includeParam = sport === 'cricket' 
         ? 'scoreboards,localteam,visitorteam,venue' 
-        : 'participants;state;league';
+        : 'state';  // Minimal include for football - just state to check if match is live
       
       const apiToken = this.getApiToken(sport);
       if (!apiToken) {
@@ -63,20 +65,21 @@ export class SportsMonksService {
       
       this.logger.log(`Calling ${sport === 'cricket' ? 'v2.0' : 'v3'} API: ${endpoint}`, 'SportsMonksService');
       
-      // Add timestamp to prevent caching - ensure fresh data for current batters/bowlers
-      const timestamp = Date.now();
+      // Check Redis cache first to reduce API calls and costs
+      const cacheKey = `sportsmonks:live_matches:${sport}`;
+      const cachedData = await this.redisService.get(cacheKey);
       
+      if (cachedData) {
+        this.logger.log(`Returning cached live matches for ${sport} (cache hit)`, 'SportsMonksService');
+        return JSON.parse(cachedData);
+      }
+      
+      // No cache - fetch from API
       const response = await firstValueFrom(
         this.httpService.get(endpoint, {
           params: {
             api_token: apiToken,
             include: includeParam,
-            _t: timestamp, // Cache buster
-          },
-          headers: {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0',
           },
         }),
       );
@@ -86,6 +89,14 @@ export class SportsMonksService {
         const errorMsg = response.data?.message?.message || response.data?.message || 'Unknown error';
         this.logger.error(`SportsMonks API error: ${errorMsg}`, '', 'SportsMonksService');
         throw new Error(`SportsMonks API error: ${errorMsg}`);
+      }
+      
+      // Log if we got a subscription/rate limit message instead of data
+      if (!response.data.data && response.data.message) {
+        this.logger.error(`SportsMonks API returned subscription/rate limit message instead of data`, '', 'SportsMonksService');
+        this.logger.error(`Full response: ${JSON.stringify(response.data)}`, '', 'SportsMonks');
+        // Return empty array - endpoint not available in subscription
+        return [];
       }
 
       // Log full response structure for debugging
@@ -142,6 +153,13 @@ export class SportsMonksService {
           name: m.name || `${m.localteam?.name || 'T1'} vs ${m.visitorteam?.name || 'T2'}`,
         }));
         this.logger.log(`Sample live matches: ${JSON.stringify(sample, null, 2)}`, 'SportsMonksService');
+      }
+      
+      // Cache the results for 30 seconds to reduce API calls
+      // This prevents rate limiting while still getting relatively fresh data
+      if (matches.length > 0) {
+        await this.redisService.set(cacheKey, JSON.stringify(matches), 30);
+        this.logger.log(`Cached ${matches.length} live matches for ${sport} (30s TTL)`, 'SportsMonksService');
       }
       
       return matches;
@@ -348,105 +366,45 @@ export class SportsMonksService {
 
   async getMatchDetails(matchId: string, sport: Sport = 'cricket'): Promise<any> {
     try {
-      // No caching - always fetch fresh data
+      // CRITICAL FIX: Only use /fixtures/{id} endpoint to avoid double API calls
+      // Previously was calling /livescores first, then /fixtures/{id} (2 calls per request!)
+      // This was causing excessive API usage and rate limiting
       const baseUrl = this.getBaseUrl(sport);
-      
-      // CRITICAL: For live matches, use /livescores endpoint first (more real-time)
-      // Then fall back to /fixtures/{id} if not found in livescores
-      // The /livescores endpoint is updated more frequently than /fixtures/{id}
-      let match: any = null;
-      let response: any = null;
-      
-      // Add timestamp to prevent caching - ensure fresh data
-      const timestamp = Date.now();
-      
-      // Strategy 1: Try /livescores endpoint first (more real-time for live matches)
       const apiToken = this.getApiToken(sport);
-      if (sport === 'cricket') {
-        try {
-          this.logger.log(`[Match ${matchId}] Attempting to fetch from /livescores endpoint (more real-time)...`, 'SportsMonksService');
-          const livescoresResponse = await firstValueFrom(
-            this.httpService.get(`${baseUrl}/livescores`, {
-              params: {
-                api_token: apiToken,
-                include: 'scoreboards,localteam,visitorteam,venue',
-                _t: timestamp,
-              },
-              headers: {
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0',
-              },
-            }),
-          );
-          
-          const livescoresMatches = livescoresResponse.data?.data || [];
-          const liveMatch = livescoresMatches.find((m: any) => m.id?.toString() === matchId.toString());
-          
-          if (liveMatch) {
-            this.logger.log(`[Match ${matchId}] Found in /livescores endpoint, fetching full details...`, 'SportsMonksService');
-            match = liveMatch;
-            // Now fetch full details with batting/bowling from /fixtures/{id}
-            // But we'll use the scoreboards from /livescores which are more up-to-date
-          } else {
-            this.logger.log(`[Match ${matchId}] Not found in /livescores, will try /fixtures/{id}...`, 'SportsMonksService');
-          }
-        } catch (livescoresError: any) {
-          this.logger.warn(`[Match ${matchId}] /livescores endpoint failed: ${livescoresError.message}, will try /fixtures/{id}...`, 'SportsMonksService');
-        }
+      
+      // Check Redis cache first to reduce API calls
+      const cacheKey = `sportsmonks:match_details:${sport}:${matchId}`;
+      const cachedData = await this.redisService.get(cacheKey);
+      
+      if (cachedData) {
+        this.logger.log(`[Match ${matchId}] Returning cached match details (cache hit)`, 'SportsMonksService');
+        return JSON.parse(cachedData);
       }
       
-      // Strategy 2: Fetch full details from /fixtures/{id} (has batting/bowling data)
-      // If we found match in livescores, we'll merge the scoreboards from livescores with full details from fixtures
+      // Strategy: Use /fixtures/{id} endpoint directly (single API call)
+      // This endpoint has all the data we need including scoreboards with batting/bowling
       // v2.0 uses different includes than v3
-      // Include batting and bowling for detailed match statistics
-      // For SportMonks v2.0 cricket API, use simpler include format
-      // v2.0 supports: scoreboards (which includes batting/bowling), batting, bowling separately
-      // Try to include batting/bowling data with player details
-      // NOTE: The /fixtures/{id} endpoint may reject certain include parameters
-      // Strategy: Try nested includes first, then batting/bowling without .player, then simpler includes
-      
-      // Try 1: For v2.0 API, scoreboards contain batting/bowling nested inside
-      // Use scoreboards include which should include batting/bowling data
-      // Avoid separate batting/bowling includes that may not be supported by subscription
       let includeParam = sport === 'cricket' 
         ? 'localteam,visitorteam,scoreboards,venue,league,season' 
         : 'participants;state;league;scores;lineups;events';
       
+      let match: any = null;
+      let response: any = null;
+      
       try {
+        // CRITICAL: Removed cache buster to allow Redis caching
+        // Redis cache (30s TTL) will reduce API calls significantly
         response = await firstValueFrom(
           this.httpService.get(`${baseUrl}/fixtures/${matchId}`, {
             params: {
               api_token: apiToken,
               include: includeParam,
-              _t: timestamp, // Cache buster
-            },
-            headers: {
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              'Pragma': 'no-cache',
-              'Expires': '0',
             },
           }),
         );
-        const fixturesMatch = response.data?.data;
+        match = response.data?.data;
         
-        // CRITICAL: If we found match in livescores, prefer its scoreboards (more up-to-date)
-        // But use batting/bowling and other details from fixtures
-        if (match && fixturesMatch) {
-          this.logger.log(`[Match ${matchId}] Merging /livescores scoreboards with /fixtures/{id} full details...`, 'SportsMonksService');
-          match = {
-            ...fixturesMatch,
-            // Prefer scoreboards from livescores (more real-time)
-            scoreboards: match.scoreboards || fixturesMatch.scoreboards,
-            // But keep status from livescores if it's more recent
-            status: match.status || fixturesMatch.status,
-            live: match.live !== undefined ? match.live : fixturesMatch.live,
-          };
-        } else {
-          match = fixturesMatch || match;
-        }
-        
-        this.logger.log(`[Match ${matchId}] Successfully fetched with nested player includes`, 'SportsMonksService');
+        this.logger.log(`[Match ${matchId}] Successfully fetched from /fixtures/{id}`, 'SportsMonksService');
       } catch (firstError: any) {
         // If 400 error, try with minimal includes (scoreboards should contain batting/bowling nested)
         // Avoid multiple retries to prevent rate limiting
@@ -464,27 +422,25 @@ export class SportsMonksService {
                 params: {
                   api_token: apiToken,
                   include: minimalInclude,
-                  _t: timestamp, // Cache buster
-                },
-                headers: {
-                  'Cache-Control': 'no-cache, no-store, must-revalidate',
-                  'Pragma': 'no-cache',
-                  'Expires': '0',
                 },
               }),
             );
             match = response.data?.data;
             this.logger.log(`[Match ${matchId}] Successfully fetched with minimal includes (scoreboards should contain batting/bowling)`, 'SportsMonksService');
           } catch (secondError: any) {
-            // If minimal includes also fail, log but don't throw - use whatever data we have
+            // If minimal includes also fail, log and throw
             this.logger.error(`[Match ${matchId}] Failed with minimal includes: ${secondError.response?.status} - ${JSON.stringify(secondError.response?.data || {})}`, '', 'SportsMonksService');
-            // Don't throw - continue with match data from livescores if available
-            // The transformer will handle missing batting/bowling gracefully
-            this.logger.warn(`[Match ${matchId}] Continuing with available data (may not have batting/bowling from fixtures)`, 'SportsMonksService');
+            throw secondError;
           }
         } else {
           throw firstError;
         }
+      }
+      
+      // Cache the result for 30 seconds to reduce API calls
+      if (match) {
+        await this.redisService.set(cacheKey, JSON.stringify(match), 30);
+        this.logger.log(`[Match ${matchId}] Cached match details (30s TTL)`, 'SportsMonksService');
       }
       
       // Check if match data exists
@@ -624,9 +580,18 @@ export class SportsMonksService {
       let balls: any[] = [];
       let response: any = null;
       
-      // Add timestamp to prevent caching - ensure fresh commentary data
-      const timestamp = Date.now();
+      // CRITICAL: Removed cache buster to allow Redis caching
+      // Commentary data can be cached for 30-60 seconds to reduce API calls
       const apiToken = this.getApiToken(sport);
+      
+      // Check Redis cache first
+      const cacheKey = `sportsmonks:commentary:${sport}:${matchId}`;
+      const cachedData = await this.redisService.get(cacheKey);
+      
+      if (cachedData) {
+        this.logger.log(`[Match ${matchId}] Returning cached commentary (cache hit)`, 'SportsMonksService');
+        return JSON.parse(cachedData);
+      }
       
       // First try: with all available includes
       try {
@@ -635,12 +600,6 @@ export class SportsMonksService {
             params: {
               api_token: apiToken,
               include: 'balls.batsman,balls.bowler,balls.score,balls.batsmanout,balls.catchstump',
-              _t: timestamp, // Cache buster
-            },
-            headers: {
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              'Pragma': 'no-cache',
-              'Expires': '0',
             },
           }),
         );
@@ -655,12 +614,6 @@ export class SportsMonksService {
                 params: {
                   api_token: apiToken,
                   include: 'balls',
-                  _t: timestamp, // Cache buster
-                },
-                headers: {
-                  'Cache-Control': 'no-cache, no-store, must-revalidate',
-                  'Pragma': 'no-cache',
-                  'Expires': '0',
                 },
               }),
             );
@@ -742,7 +695,7 @@ export class SportsMonksService {
         
         // Return structured data with innings separated
         // S1 = First Innings, S2 = Second Innings
-        return {
+        const result = {
           firstInnings: commentaryByInnings['S1'] || [],
           secondInnings: commentaryByInnings['S2'] || [],
           all: Object.values(commentaryByInnings).flat().sort((a: any, b: any) => {
@@ -750,6 +703,12 @@ export class SportsMonksService {
             return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
           }),
         };
+        
+        // Cache the result for 30 seconds to reduce API calls
+        await this.redisService.set(cacheKey, JSON.stringify(result), 30);
+        this.logger.log(`[Match ${matchId}] Cached commentary (30s TTL)`, 'SportsMonksService');
+        
+        return result;
       } else {
         this.logger.warn(`No ball-by-ball data available for match ${matchId}`, 'SportsMonksService');
         return {

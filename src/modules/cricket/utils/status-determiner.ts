@@ -14,14 +14,54 @@ export interface StatusDeterminationResult {
 /**
  * Determines match status with high confidence
  * Priority order ensures API inconsistencies are handled correctly
+ * 
+ * IMPORTANT: Cricket V2 and Football V3 use DIFFERENT state_id meanings!
+ * - Cricket V2: state_id 2 = "Starting soon" (upcoming)
+ * - Football V3: state_id 2 = "INPLAY_1ST_HALF" (LIVE!)
+ * 
+ * @param apiMatch - The match data from API
+ * @param sport - Optional sport type to handle V2/V3 differences ('cricket' or 'football')
  */
-export function determineMatchStatus(apiMatch: any): StatusDeterminationResult {
+export function determineMatchStatus(apiMatch: any, sport?: 'cricket' | 'football'): StatusDeterminationResult {
   const stateId = apiMatch.state_id;
   const statusField = apiMatch.status || '';
   const noteField = apiMatch.note || '';
   const liveField = apiMatch.live;
+  const stateObject = apiMatch.state; // V3 API includes state object
 
-  // Priority 1: state_id (most reliable when present)
+  // Priority 0: V3 API state object (most reliable for Football V3)
+  if (stateObject && stateObject.developer_name) {
+    const stateName = stateObject.developer_name.toUpperCase();
+    
+    // Football V3 live states
+    if (stateName.includes('INPLAY') || stateName.includes('HT') || stateName.includes('BREAK')) {
+      return {
+        status: 'live',
+        confidence: 'high',
+        reason: `V3 state="${stateObject.name}" (${stateName})`,
+      };
+    }
+    
+    // Football V3 finished states
+    if (stateName.includes('FINISHED') || stateName.includes('FT') || stateName.includes('ENDED')) {
+      return {
+        status: 'completed',
+        confidence: 'high',
+        reason: `V3 state="${stateObject.name}" (${stateName})`,
+      };
+    }
+    
+    // Football V3 upcoming states
+    if (stateName.includes('NS') || stateName.includes('NOT_STARTED') || stateName.includes('SCHEDULED')) {
+      return {
+        status: 'upcoming',
+        confidence: 'high',
+        reason: `V3 state="${stateObject.name}" (${stateName})`,
+      };
+    }
+  }
+
+  // Priority 1: state_id (handle V2 Cricket vs V3 Football differences)
   if (stateId !== undefined) {
     if (stateId === 5 || stateId === 6) {
       return {
@@ -45,14 +85,46 @@ export function determineMatchStatus(apiMatch: any): StatusDeterminationResult {
         reason: `state_id=${stateId} (3=in progress, 4=break)`,
       };
     }
-    if (stateId === 1 || stateId === 2) {
-      // NOTE: state_id 1 or 2 means "not started" or "starting soon"
-      // However, if a match is in the /livescores endpoint, it might be starting imminently
-      // The caller (live-match.service) will handle this case specially
+    
+    // CRITICAL FIX: Handle state_id 2 differently for Football V3 vs Cricket V2
+    if (stateId === 2) {
+      // If we have V3 state object, we've already handled it above
+      // If match is from /livescores or /inplay endpoint, it's likely live
+      // For Football V3: state_id 2 = INPLAY_1ST_HALF (LIVE!)
+      // For Cricket V2: state_id 2 = Starting soon (upcoming)
+      
+      // If sport is explicitly football, treat state_id 2 as live
+      if (sport === 'football') {
+        return {
+          status: 'live',
+          confidence: 'high',
+          reason: `Football V3: state_id=${stateId} (INPLAY_1ST_HALF)`,
+        };
+      }
+      
+      // For cricket or unknown, treat as upcoming (original behavior)
       return {
         status: 'upcoming',
         confidence: 'high',
-        reason: `state_id=${stateId} (1=not started, 2=starting soon)`,
+        reason: `Cricket V2: state_id=${stateId} (starting soon)`,
+      };
+    }
+    
+    if (stateId === 1) {
+      // state_id 1 = Not started
+      return {
+        status: 'upcoming',
+        confidence: 'high',
+        reason: `state_id=${stateId} (not started)`,
+      };
+    }
+    
+    // Handle state_id 22 (often seen in football, seems to be a variant of live)
+    if (stateId === 22 && sport === 'football') {
+      return {
+        status: 'live',
+        confidence: 'medium',
+        reason: `Football: state_id=${stateId} (unknown state, but in livescores endpoint)`,
       };
     }
   }

@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { MatchTransitionService } from './match-transition.service';
 import { LiveMatchService } from './live-match.service';
 import { CompletedMatchService } from './completed-match.service';
@@ -9,6 +9,8 @@ export class MatchSchedulerService implements OnModuleInit {
   private transitionInterval: NodeJS.Timeout | null = null;
   private liveUpdateInterval: NodeJS.Timeout | null = null;
   private completedSyncInterval: NodeJS.Timeout | null = null;
+  private footballLiveUpdateInterval: NodeJS.Timeout | null = null;
+  private footballLiveMatchService: any = null;
 
   constructor(
     private matchTransitionService: MatchTransitionService,
@@ -17,6 +19,14 @@ export class MatchSchedulerService implements OnModuleInit {
     private logger: WinstonLoggerService,
   ) {}
 
+  /**
+   * Set football live match service (called from FootballModule)
+   */
+  setFootballLiveMatchService(service: any) {
+    this.footballLiveMatchService = service;
+    this.logger.log('Football live match service registered with scheduler', 'MatchSchedulerService');
+  }
+
   async onModuleInit() {
     this.logger.log('Initializing match schedulers...', 'MatchSchedulerService');
     
@@ -24,9 +34,20 @@ export class MatchSchedulerService implements OnModuleInit {
     try {
       this.logger.log('Fetching initial live matches on startup...', 'MatchSchedulerService');
       await this.liveMatchService.fetchAndUpdateLiveMatches();
-      this.logger.log('Initial live matches fetched', 'MatchSchedulerService');
+      this.logger.log('Initial cricket live matches fetched', 'MatchSchedulerService');
     } catch (error: any) {
-      this.logger.error('Failed to fetch initial live matches', error.stack, 'MatchSchedulerService');
+      this.logger.error('Failed to fetch initial cricket live matches', error.stack, 'MatchSchedulerService');
+    }
+    
+    // Fetch football live matches if service is available
+    if (this.footballLiveMatchService) {
+      try {
+        this.logger.log('Fetching initial football live matches on startup...', 'MatchSchedulerService');
+        await this.footballLiveMatchService.fetchAndUpdateLiveMatches();
+        this.logger.log('Initial football live matches fetched', 'MatchSchedulerService');
+      } catch (error: any) {
+        this.logger.error('Failed to fetch initial football live matches', error.stack, 'MatchSchedulerService');
+      }
     }
     
     // Start background schedulers
@@ -48,18 +69,30 @@ export class MatchSchedulerService implements OnModuleInit {
       }
     }, 120000); // 2 minutes - reduced to avoid rate limiting
 
-    // 2. Update live matches every 15 seconds for real-time UI updates via WebSocket
+    // 2. Update cricket live matches every 30 seconds to reduce API calls and costs
     // Note: getMatchDetails is only called when user requests match details page, not during background updates
-    // This avoids rate limiting while maintaining real-time updates
+    // UI gets data from database via WebSocket broadcasts, not directly from API
+    // This reduces API costs while maintaining real-time updates
     this.liveUpdateInterval = setInterval(async () => {
       try {
         await this.liveMatchService.fetchAndUpdateLiveMatches();
       } catch (error: any) {
-        this.logger.error('Error in live match update scheduler', error.stack, 'MatchSchedulerService');
+        this.logger.error('Error in cricket live match update scheduler', error.stack, 'MatchSchedulerService');
       }
-    }, 15000); // 15 seconds - real-time updates for WebSocket broadcasting
+    }, 30000); // 30 seconds - reduces API calls while UI gets data from database
 
-    // 3. Sync completed matches every hour
+    // 3. Update football live matches every 30 seconds (same interval as cricket)
+    if (this.footballLiveMatchService) {
+      this.footballLiveUpdateInterval = setInterval(async () => {
+        try {
+          await this.footballLiveMatchService.fetchAndUpdateLiveMatches();
+        } catch (error: any) {
+          this.logger.error('Error in football live match update scheduler', error.stack, 'MatchSchedulerService');
+        }
+      }, 30000); // 30 seconds - same as cricket
+    }
+
+    // 4. Sync completed matches every hour
     this.completedSyncInterval = setInterval(async () => {
       try {
         await this.completedMatchService.fetchAndSaveCompletedMatches();
@@ -80,6 +113,9 @@ export class MatchSchedulerService implements OnModuleInit {
     }
     if (this.liveUpdateInterval) {
       clearInterval(this.liveUpdateInterval);
+    }
+    if (this.footballLiveUpdateInterval) {
+      clearInterval(this.footballLiveUpdateInterval);
     }
     if (this.completedSyncInterval) {
       clearInterval(this.completedSyncInterval);
