@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Pre-commit hook to prevent committing files with only formatting changes
+# This helps avoid the "Prettier changes after reopen" issue
+
+echo "Running pre-commit checks..."
+
+# Get list of staged files
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|js|tsx|jsx)$')
+
+if [ -z "$STAGED_FILES" ]; then
+  echo "No TypeScript/JavaScript files to check."
+  exit 0
+fi
+
+# Check if changes are only whitespace/formatting
+HAS_REAL_CHANGES=false
+
+for FILE in $STAGED_FILES; do
+  # Check if file has changes beyond whitespace
+  DIFF=$(git diff --cached --ignore-all-space --ignore-blank-lines "$FILE")
+  
+  if [ -n "$DIFF" ]; then
+    HAS_REAL_CHANGES=true
+    break
+  fi
+done
+
+if [ "$HAS_REAL_CHANGES" = false ]; then
+  echo "⚠️  WARNING: Only formatting/whitespace changes detected."
+  echo "This is likely due to Prettier auto-formatting."
+  echo "Unstaging these files to prevent unnecessary commits."
+  
+  for FILE in $STAGED_FILES; do
+    git restore --staged "$FILE"
+    echo "  - Unstaged: $FILE"
+  done
+  
+  echo ""
+  echo "ℹ️  To prevent this in the future:"
+  echo "   1. Disable 'Format on Save' in your editor"
+  echo "   2. Only format files you're actively editing"
+  echo ""
+  exit 1
+fi
+
+echo "✓ Pre-commit checks passed."
+exit 0
