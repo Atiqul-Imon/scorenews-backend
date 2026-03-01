@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build outputs
+dist/
+build/
+*.js.map
+*.d.ts.map
+
+# Generated files
+*.generated.ts
+*.generated.js
+
+# Documentation (markdown files can have different formatting preferences)
+*.md
+
+# JSON files (prevent auto-formatting of complex JSON)
+*.json
+!.prettierrc
+!tsconfig.json
+!tsconfig.build.json
+!nest-cli.json
+!package.json
+
+# Environment files
+.env*
+
+# Logs
+*.log
+
+# Uploads
+uploads/
+
+# Scripts (may have intentional formatting)
+scripts/*.js
+scripts/*.ts
+
+# Coverage
+coverage/
+
+# Cache
+.cache/
+.eslintcache
+*.tsbuildinfo

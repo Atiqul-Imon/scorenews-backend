@@ -1,0 +1,39 @@
+{
+  // Disable auto-formatting on save to prevent unwanted changes
+  "editor.formatOnSave": false,
+  "editor.formatOnPaste": false,
+  "editor.formatOnType": false,
+  
+  // TypeScript settings
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  
+  // ESLint
+  "eslint.validate": [
+    "javascript",
+    "typescript"
+  ],
+  
+  // File associations
+  "files.associations": {
+    "*.env*": "dotenv"
+  },
+  
+  // Exclude files from file watcher
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/.git/**": true,
+    "**/uploads/**": true
+  },
+  
+  // Search exclusions
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/uploads": true,
+    "**/*.log": true
+  }
+}
