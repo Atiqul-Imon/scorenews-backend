@@ -46,6 +46,70 @@ jobs:
           npm run build
           echo "✅ Build successful"
 
+      - name: Cleanup Docker resources on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          timeout: 300s
+          script: |
+            set -e
+            
+            echo "🧹 Pre-deployment cleanup..."
+            echo "======================================"
+            
+            # Show disk space before cleanup
+            echo "💾 Disk space BEFORE cleanup:"
+            df -h / | grep -E '(Filesystem|/$)'
+            echo ""
+            
+            APP_DIR="/var/www/sports-platform-api"
+            cd $APP_DIR
+            
+            # Stop containers
+            echo "🛑 Stopping containers..."
+            docker-compose down || true
+            
+            # Clean old Docker resources
+            echo "🧹 Cleaning Docker resources..."
+            
+            # Remove old images (keep last 2 builds)
+            echo "  - Removing old images..."
+            docker images | grep sports-platform-api | tail -n +3 | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
+            
+            # Clean dangling images
+            echo "  - Removing dangling images..."
+            docker image prune -f || true
+            
+            # Clean build cache older than 24 hours
+            echo "  - Cleaning build cache..."
+            docker builder prune -af --filter "until=24h" || true
+            
+            # Clean npm cache
+            echo "  - Cleaning npm cache..."
+            npm cache clean --force 2>/dev/null || true
+            
+            # Truncate Docker logs
+            echo "  - Truncating Docker logs..."
+            truncate -s 0 /var/lib/docker/containers/*/*-json.log 2>/dev/null || true
+            
+            # Show disk space after cleanup
+            echo ""
+            echo "💾 Disk space AFTER cleanup:"
+            df -h / | grep -E '(Filesystem|/$)'
+            
+            # Check if we have enough space
+            DISK_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+            if [ $DISK_USAGE -gt 85 ]; then
+              echo "⚠️  WARNING: Disk usage is ${DISK_USAGE}% (>85%). Deployment may fail!"
+              echo "Consider upgrading server or cleaning more aggressively."
+            else
+              echo "✅ Disk space OK (${DISK_USAGE}% used)"
+            fi
+            echo ""
+
       - name: Deploy to DigitalOcean with Docker
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -97,7 +161,7 @@ jobs:
             echo "📝 Latest commit:"
             git log -1 --oneline
             
-            # Stop existing container if running
+            # Stop existing container if running (already done in cleanup, but being safe)
             echo "🛑 Stopping existing container..."
             docker-compose down || true
             
